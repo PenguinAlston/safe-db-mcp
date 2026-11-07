@@ -8,7 +8,7 @@ ruff check src tests
 pytest -q
 ```
 
-GitHub Actions 工作流会在 Python 3.12 上运行 lint 和单元测试命令。
+GitHub Actions 工作流会在 Python 3.12 上运行 lint、单元测试和真实数据库集成测试：workflow 启动 MySQL 8.4 与 PostgreSQL 16 服务容器，注入 `SAFEDB_TEST_*_URL` 环境变量后执行完整测试套件，并单独运行 `tests/test_database_integration.py` 一步——该步骤使数据库服务故障以独立的失败暴露，集成测试不允许以跳过的形式变绿。Oracle 19c 仍只能按下面的矩阵人工执行。
 
 ## 当前单元测试能够证明什么
 
