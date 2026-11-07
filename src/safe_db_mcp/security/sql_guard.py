@@ -22,11 +22,11 @@ class ValidatedQuery:
     tables: tuple[str, ...]
     columns: tuple[str, ...]
     has_top_level_limit: bool
+    limit_value: int | None
     join_count: int
     select_count: int
 
 
-# Deliberately small function allowlist. Expand only after dialect-specific review.
 SAFE_FUNCTIONS = {
     "ABS", "AVG", "CAST", "CEIL", "CEILING", "COALESCE", "CONCAT",
     "COUNT", "CURRENT_DATE", "CURRENT_TIMESTAMP", "DATE", "DATE_TRUNC",
@@ -134,7 +134,17 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
         raise SQLRejected(f"Forbidden SQL construct: {forbidden[0]}")
 
     top_select = tree if isinstance(tree, exp.Select) else next(tree.find_all(exp.Select), None)
-    has_limit = bool(top_select and top_select.args.get("limit"))
+    limit_node = top_select.args.get("limit") if top_select is not None else None
+    has_limit = limit_node is not None
+    limit_value = None
+    if limit_node is not None:
+        limit_expression = limit_node.args.get("expression")
+        if isinstance(limit_expression, exp.Literal) and not limit_expression.is_string:
+            try:
+                limit_value = int(limit_expression.this)
+            except (TypeError, ValueError):
+                limit_value = None
+
     joins = sum(1 for _ in tree.find_all(exp.Join))
     selects = sum(1 for _ in tree.find_all(exp.Select))
 
@@ -152,6 +162,7 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
         tables=tuple(sorted(tables)),
         columns=tuple(sorted(columns)),
         has_top_level_limit=has_limit,
+        limit_value=limit_value,
         join_count=joins,
         select_count=max(1, selects),
     )
