@@ -67,10 +67,14 @@ def test_worker_ui_authenticates_and_sets_httponly_strict_cookie():
     manager = make_manager()
     manager.set_ui_password("local-dashboard-password")
     client = TestClient(create_worker_ui_app(manager))
-    csrf = login(client, "local-dashboard-password")
-    cookie = client.cookies.get("safedb_worker_session")
-    assert cookie
-    assert "HttpOnly" in client.cookies.jar._cookies["testserver.local"]["/"]["safedb_worker_session"]._rest
+    response = client.post(
+        "/api/login", headers=headers(), json={"password": "local-dashboard-password"}
+    )
+    csrf = response.json()["csrf_token"]
+    assert response.status_code == 200
+    assert "httponly" in response.headers["set-cookie"].lower()
+    assert "samesite=strict" in response.headers["set-cookie"].lower()
+    assert client.cookies.get("safedb_worker_session")
     assert csrf
     response = client.get("/api/status", headers={"host": "127.0.0.1:8090"})
     assert response.status_code == 200
