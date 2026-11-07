@@ -13,7 +13,7 @@
 
 ## 提案生命周期
 
-\`\`\`text
+```text
 Agent 提交
      |
      v
@@ -46,9 +46,9 @@ ANALYZING_WORKER
                                          BLOCKED 或重新审核       执行
                                                                   |
                                                               SUCCEEDED
-\`\`\`
+```
 
-过期任务认领会被恢复到 \`ANALYZING\` 或 \`APPROVED\`。租约恢复时会清除之前的 fencing token。每次 Worker 写入都必须检查当前 token 和预期状态，确保旧进程无法在任务被转交后发布结果。
+过期任务认领会被恢复到 `ANALYZING` 或 `APPROVED`。租约恢复时会清除之前的 fencing token。每次 Worker 写入都必须检查当前 token 和预期状态，确保旧进程无法在任务被转交后发布结果。
 
 ## 执行门禁
 
@@ -58,7 +58,7 @@ ANALYZING_WORKER
 2. 使用所选数据库方言重新解析 SQL。
 3. 在新连接上验证数据库原生只读能力。
 4. 在数据库目录中解析所有被引用对象，并且只接受受支持的基表对象。
-5. 在安全的情况下运行有界 EXPLAIN；Oracle 的 EXPLAIN PLAN 会写入 \`PLAN_TABLE\`，因此有意跳过。
+5. 在安全的情况下运行有界 EXPLAIN；Oracle 的 EXPLAIN PLAN 会写入 `PLAN_TABLE`，因此有意跳过。
 6. 重新计算风险并与审批快照比较。任何变化都会使原审批失效。
 7. 执行前再次确认 Worker 仍持有当前 fencing token。
 8. 在具备时间和资源限制的数据库原生只读事务中执行。
