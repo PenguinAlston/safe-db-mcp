@@ -36,7 +36,7 @@ class DataSource:
 
 def normalise_identifier(value: str) -> str:
     return ".".join(
-        part.strip().strip('"[]').casefold() for part in value.split(".")
+        part.strip().strip(chr(96) + '"[]').casefold() for part in value.split(".")
     )
 
 
