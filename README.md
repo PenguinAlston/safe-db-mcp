@@ -17,26 +17,16 @@ A guarded SQL query gateway for AI agents. The API and MCP server accept query r
 ## Architecture
 
 ```text
-Agent / MCP client
-       |
-       | Agent bearer token
-       v
-API  --------------------> SQLite proposal store (development only)
-       |                                  ^
-       |                                  |
-       |                         Reviewer API / separate token
-       |                                  |
-       v                                  |
-MCP server                         approve / reject
-       |
-       | (API only; no DB credentials)
-       v
-
-Worker ---- resolves datasource secret ----> MySQL / PostgreSQL / Oracle
-   |
-   +---- validates again, checks native read-only mode,
-         checks database object type, plans, executes,
-         bounds results and writes audit events
+Agent
+  |
+  v
+MCP server -- HTTP + Agent token --> API ----> Proposal store
+                                           ^          ^
+                                           |          |
+                                     Reviewer API    Worker
+                                    separate token   |
+                                      approve/deny   +--> DB secret --> Database
+                                                     +--> revalidate/plan/execute
 ```
 
 The MCP server is an API client; it does not connect to a database. The API process must not receive database URL variables. The worker should run as a separate process/container with narrowly scoped secret access and network egress.
@@ -111,7 +101,7 @@ set +a
 uvicorn safe_db_mcp.api:app --host 127.0.0.1 --port 8080
 ```
 
-Terminal 2 — worker (also export only the database URL variables needed by this worker):
+Terminal 2 — worker (load datasource URLs from a worker-only secret source):
 
 ```bash
 set -a
@@ -119,9 +109,13 @@ source .env
 set +a
 export SAFEDB_DB_PATH=./data/safedb.sqlite3
 export SAFEDB_DATASOURCES_FILE=./config/datasources.yaml
-# Export MYSQL8_URL / PG16_URL / ORACLE19C_URL securely here.
+# Inject only the datasource URLs this worker needs, for example from Vault
+# or a local secret manager. Do not add these values to the API's environment.
+export PG16_URL="$(your-secret-manager-command-for-PG16_URL)"
 python -m safe_db_mcp.worker
 ```
+
+Keep database URLs out of the shared `.env` used for the API and MCP terminal commands. The worker shell should receive only the datasource secrets it needs. For Compose, values in the Compose interpolation file are passed only to the worker service because the API service does not declare DB URL variables.
 
 Terminal 3 — MCP server:
 
