@@ -68,8 +68,7 @@ def assess_risk(
     score = min(score, 100)
     level = "LOW" if score < 20 else "MEDIUM" if score < 50 else "HIGH"
 
-    # Use boolean operators rather than eager tuple evaluation so a missing
-    # estimate/limit safely evaluates to false instead of raising TypeError.
+    # Use short-circuit operators so absent estimates/limits fail closed.
     auto_eligible = (
         level == "LOW"
         and datasource.auto_execute
@@ -78,7 +77,7 @@ def assess_risk(
         and rows <= datasource.max_auto_scan_rows
         and query.limit_value is not None
         and 0 < query.limit_value <= datasource.max_result_rows
-        and not (query.columns & datasource.sensitive_columns)
+        and not (set(query.columns) & datasource.sensitive_columns)
     )
 
     return RiskAssessment(
