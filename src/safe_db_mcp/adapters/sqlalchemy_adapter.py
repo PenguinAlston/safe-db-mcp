@@ -8,6 +8,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Iterator
 
+from pymysql.connections import Connection as PyMySQLConnection
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -24,30 +25,60 @@ def _json_value(value: Any) -> Any:
         return str(value)
     if isinstance(value, bytes):
         return value.hex()
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_value(item) for key, item in value.items()}
     return value
 
 
 def _walk_postgres(plan: dict) -> tuple[int | None, int | None]:
     scan_types = {
         "Seq Scan", "Index Scan", "Index Only Scan", "Bitmap Heap Scan",
-        "Bitmap Index Scan", "Foreign Scan", "Tid Scan",
+        "Bitmap Index Scan", "Tid Scan", "Tid Range Scan",
+    }
+    container_types = {
+        "Limit", "Aggregate", "Group", "Sort", "Incremental Sort", "Unique",
+        "Hash", "Hash Join", "Merge Join", "Append", "Merge Append", "Result",
+        "Materialize", "Subquery Scan", "BitmapAnd", "BitmapOr", "SetOp",
     }
     total = 0
     found = False
+    reliable = True
 
     def walk(node):
-        nonlocal total, found
+        nonlocal total, found, reliable
         if not isinstance(node, dict):
+            reliable = False
             return
-        if node.get("Node Type") in scan_types and isinstance(node.get("Plan Rows"), int):
-            total += node["Plan Rows"]
-            found = True
+        kind = node.get("Node Type")
+        if (
+            kind not in scan_types | container_types
+            or node.get("Parent Relationship") in {"SubPlan", "InitPlan"}
+            or node.get("Parallel Aware")
+        ):
+            reliable = False
+        if kind in scan_types:
+            rows = node.get("Plan Rows")
+            # Plan Rows counts survivors, not tuples inspected before a scan filter.
+            if node.get("Filter") or node.get("Recheck Cond") or type(rows) is not int:
+                reliable = False
+            elif rows < 0:
+                reliable = False
+            else:
+                total += rows
+                found = True
         for child in node.get("Plans", []):
             walk(child)
 
     walk(plan)
     returned = plan.get("Plan Rows")
-    return total if found else None, returned if isinstance(returned, int) else None
+    return (
+        total if found and reliable else None,
+        returned if type(returned) is int and returned >= 0 else None,
+    )
 
 
 def _walk_mysql(value: Any) -> int | None:
@@ -58,8 +89,8 @@ def _walk_mysql(value: Any) -> int | None:
             rows = item.get("rows_examined_per_scan")
             if rows is None and "table_name" in item:
                 rows = item.get("rows")
-            if isinstance(rows, (int, float)):
-                found.append(int(rows))
+            if type(rows) in {int, float} and math.isfinite(rows) and rows >= 0:
+                found.append(math.ceil(rows))
             for child in item.values():
                 walk(child)
         elif isinstance(item, list):
@@ -67,7 +98,8 @@ def _walk_mysql(value: Any) -> int | None:
                 walk(child)
 
     walk(value)
-    return sum(found) if found else None
+    # Per-scan counts do not account for repeated scans in joins or subqueries.
+    return found[0] if len(found) == 1 else None
 
 
 class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
@@ -110,6 +142,7 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
         """Start a read-only metadata/planning transaction with DB-side timeouts."""
         if self.dialect == "postgres":
             conn.exec_driver_sql("SET TRANSACTION READ ONLY")
+            conn.exec_driver_sql("SET LOCAL search_path = pg_catalog")
             conn.exec_driver_sql(
                 f"SET LOCAL statement_timeout = '{self.timeout_ms}ms'"
             )
@@ -118,7 +151,9 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
             conn.exec_driver_sql(
                 f"SET SESSION max_execution_time = {self.timeout_ms}"
             )
-            conn.exec_driver_sql("START TRANSACTION READ ONLY")
+            # MySQL reports the session default, not a READ ONLY transaction override.
+            conn.exec_driver_sql("SET SESSION transaction_read_only = ON")
+            conn.exec_driver_sql("START TRANSACTION")
             return
         if self.dialect == "oracle":
             # call_timeout is a driver property, not a SQL statement. Set it before
@@ -132,8 +167,9 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
         try:
             conn.rollback()
             if self.dialect == "mysql":
-                # This is a session variable and must not leak through the pool.
+                # These are session variables and must not leak through the pool.
                 conn.exec_driver_sql("SET SESSION max_execution_time = 0")
+                conn.exec_driver_sql("SET SESSION transaction_read_only = DEFAULT")
                 conn.rollback()
             elif self.dialect == "oracle":
                 conn.connection.driver_connection.call_timeout = 0
@@ -184,23 +220,30 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                     if self.dialect == "mysql":
                         row = conn.execute(
                             text(
-                                "SELECT TABLE_TYPE FROM information_schema.TABLES "
+                                "SELECT TABLE_TYPE, ENGINE FROM information_schema.TABLES "
                                 "WHERE TABLE_SCHEMA=:schema AND TABLE_NAME=:table"
                             ),
                             {"schema": schema, "table": table},
-                        ).scalar()
-                        if row != "BASE TABLE":
+                        ).one_or_none()
+                        if row != ("BASE TABLE", "InnoDB"):
                             return False
                     elif self.dialect == "postgres":
                         row = conn.execute(
                             text(
-                                "SELECT c.relkind FROM pg_class c "
-                                "JOIN pg_namespace n ON n.oid=c.relnamespace "
-                                "WHERE n.nspname=:schema AND c.relname=:table"
+                                "SELECT c.relkind FROM pg_catalog.pg_class c "
+                                "JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace "
+                                "WHERE n.nspname=:schema AND c.relname=:table "
+                                "AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i "
+                                "WHERE i.inhparent=c.oid) "
+                                "AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a "
+                                "JOIN pg_catalog.pg_type t ON t.oid=a.atttypid "
+                                "JOIN pg_catalog.pg_namespace tn ON tn.oid=t.typnamespace "
+                                "WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped "
+                                "AND (t.typtype<>'b' OR tn.nspname<>'pg_catalog'))"
                             ),
                             {"schema": schema, "table": table},
                         ).scalar()
-                        if row not in {"r", "p"}:
+                        if row != "r":
                             return False
                     elif self.dialect == "oracle":
                         row = conn.execute(
@@ -262,6 +305,7 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
             raise ValueError("timeout_ms must be greater than zero")
         if self.dialect == "postgres":
             conn.exec_driver_sql("SET TRANSACTION READ ONLY")
+            conn.exec_driver_sql("SET LOCAL search_path = pg_catalog")
             mode = conn.exec_driver_sql(
                 "SHOW transaction_read_only"
             ).scalar()
@@ -278,7 +322,9 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
             conn.exec_driver_sql(
                 f"SET SESSION max_execution_time = {int(timeout_ms)}"
             )
-            conn.exec_driver_sql("START TRANSACTION READ ONLY")
+            # Set the session default so the reported and effective modes agree.
+            conn.exec_driver_sql("SET SESSION transaction_read_only = ON")
+            conn.exec_driver_sql("START TRANSACTION")
             mode = conn.exec_driver_sql(
                 "SELECT @@transaction_read_only"
             ).scalar()
@@ -310,10 +356,16 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
         byte_count = 0
         truncated = False
         failed = False
+        result = None
 
         with self.engine.connect() as conn:
+            mysql_connection = (
+                conn.connection.driver_connection if self.dialect == "mysql" else None
+            )
             try:
                 self._begin_native_readonly(conn, timeout_ms)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Query exceeded total execution time budget")
                 if self.dialect == "oracle":
                     driver = conn.connection.driver_connection
                     driver.call_timeout = min(
@@ -340,6 +392,8 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                         )
                     # One-row streaming reduces batch buffering before the byte cap.
                     batch = result.fetchmany(1)
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Query exceeded total execution time budget")
                     if not batch:
                         break
                     for row in batch:
@@ -350,6 +404,8 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                         encoded = json.dumps(
                             item, ensure_ascii=False, default=str
                         ).encode("utf-8")
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Query exceeded total execution time budget")
                         if (
                             len(rows_out) >= max_rows
                             or byte_count + len(encoded) > max_bytes
@@ -365,12 +421,21 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                 raise
             finally:
                 if self.dialect == "mysql" and (failed or truncated):
-                    # PyMySQL's unbuffered cursor close can drain all remaining rows.
-                    # Destroy the DBAPI connection instead of returning a live stream
-                    # to the pool or performing a potentially unbounded drain.
                     conn.invalidate()
+                    # Stop PyMySQL finalizers draining a stream after its socket is closed.
+                    if isinstance(mysql_connection, PyMySQLConnection):
+                        stream = mysql_connection._result
+                        if stream is not None:
+                            stream.unbuffered_active = False
+                            stream.connection = None
+                    if result is not None:
+                        result.close()
                 else:
-                    self._reset_connection_controls(conn)
+                    try:
+                        if result is not None:
+                            result.close()
+                    finally:
+                        self._reset_connection_controls(conn)
 
         return {
             "rows": rows_out,
