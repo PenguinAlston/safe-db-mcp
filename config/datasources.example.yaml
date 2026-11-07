@@ -6,7 +6,9 @@ datasources:
     allowed_agents: [local-agent]
     readonly_mode: mysql_transaction
     allowed_tables: [sales.orders, sales.order_items]
-    sensitive_columns: [customer_phone, payment_token]
+    sensitive_columns:
+      customer_phone: mask
+      payment_token: hash
     auto_execute: true
     max_auto_scan_rows: 10000
     max_hard_scan_rows: 1000000
@@ -20,7 +22,10 @@ datasources:
     allowed_agents: [local-agent]
     readonly_mode: postgres_transaction
     allowed_tables: [public.customers, public.user_profiles]
-    sensitive_columns: [email, phone, password_hash]
+    sensitive_columns:
+      email: mask
+      phone: redact
+      password_hash: null
     auto_execute: true
     max_auto_scan_rows: 5000
     max_hard_scan_rows: 500000
@@ -34,7 +39,9 @@ datasources:
     allowed_agents: [local-agent]
     readonly_mode: oracle_transaction
     allowed_tables: [FINANCE.INVOICES, FINANCE.PAYMENTS]
-    sensitive_columns: [BANK_ACCOUNT, TAX_ID]
+    sensitive_columns:
+      BANK_ACCOUNT: mask
+      TAX_ID: hash
     auto_execute: false
     max_auto_scan_rows: 0
     max_hard_scan_rows: 0

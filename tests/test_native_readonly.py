@@ -15,7 +15,7 @@ def make_datasource(dialect: str, mode: str) -> DataSource:
         url_env="TEST_DB_URL",
         readonly_mode=mode,
         allowed_tables=frozenset({"public.items"}),
-        sensitive_columns=frozenset(),
+        sensitive_columns={},
         auto_execute=False,
         max_auto_scan_rows=0,
         max_hard_scan_rows=0,

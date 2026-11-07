@@ -6,6 +6,7 @@ from typing import Any
 
 from safe_db_mcp.config import DataSource
 from safe_db_mcp.security.risk import assess_risk
+from safe_db_mcp.security.redaction import apply_redaction
 from safe_db_mcp.security.sql_guard import validate_sql
 from safe_db_mcp.store import ProposalStore
 
@@ -232,6 +233,9 @@ class QueryService:
             datasource.max_result_rows, datasource.max_result_bytes,
             datasource.timeout_ms,
         )
+        # Redaction happens before persistence: both the stored result and
+        # every later API read observe redacted values only.
+        result = apply_redaction(result, datasource.sensitive_columns)
         # Completion is a compare-and-swap against this exact worker's claim.
         # A reclaimed worker cannot publish data or overwrite approval state.
         self._worker_update(

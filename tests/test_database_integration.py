@@ -52,6 +52,22 @@ def test_live_truncation_discards_or_resets_stream(live_adapter, max_rows, max_b
     ]
 
 
+def test_live_oversized_lob_row_stops_at_byte_cap_and_releases_connection(live_adapter):
+    adapter = live_adapter
+    sql = (
+        "SELECT repeat('x', 3000000) AS v"
+        if adapter.dialect == "postgres"
+        else "SELECT REPEAT('x', 3000000) AS v"
+    )
+    response = adapter.execute_readonly(sql, {}, 10, 1024, 2000)
+    assert response["truncated"]
+    assert response["result_bytes"] <= 1024
+    assert response["returned_rows"] <= 1
+    assert adapter.execute_readonly("SELECT 1 AS id", {}, 10, 10000, 1000)["rows"] == [
+        {"id": 1}
+    ]
+
+
 def test_live_query_error_does_not_poison_pool(live_adapter):
     with pytest.raises(DBAPIError):
         live_adapter.execute_readonly("SELECT missing_column", {}, 10, 10000, 1000)

@@ -68,16 +68,18 @@ cp config/datasources.example.yaml config/datasources.yaml
 - `SAFEDB_AGENT_TOKEN`
 - `SAFEDB_REVIEWER_TOKEN`
 
-将 `SAFEDB_AGENT_ID` 和 `SAFEDB_REVIEWER_ID` 设置为不同的身份标识。编辑 `config/datasources.yaml`，使其匹配实际 Schema 和表。不要将这两个本地配置文件提交到版本库。
+将 `SAFEDB_AGENT_ID` 和 `SAFEDB_REVIEWER_ID` 设置为不同的身份标识。编辑 `config/datasources.yaml`，使其匹配实际 Schema 和表。不要将这两个本地配置文件提交到版本库。静态令牌只用于本地开发；共享部署请改用下文「身份认证」中的 OIDC 配置。
 
 每个数据源都应满足以下要求：
 
 - `allowed_tables` 必须使用带 Schema 的表名（例如 `public.orders`）。
 - `allowed_agents` 仅列出确实获准使用该数据源的 Agent ID。
-- `sensitive_columns` 必须是列名字符串列表，例如 `[payment_token]`；数值限额必须是 YAML 整数，不接受布尔值、小数或数字字符串。
+- `sensitive_columns` 必须是「列名 → 脱敏策略」映射，例如 `{payment_token: hash}`，策略取值为 `mask`（等长星号）、`hash`（SHA-256 前 12 位，可等值比较）、`redact`（固定占位符）或 `null`；数值限额必须是 YAML 整数，不接受布尔值、小数或数字字符串。
 - MySQL 仅接受 InnoDB 基表；PostgreSQL 拒绝分区父表、有继承子表的表，以及包含非 `pg_catalog` 基础类型列的表。
 - 在该数据源通过集成测试前，保持 `auto_execute: false`。
 - 使用权限范围尽可能小的数据库账号。
+
+敏感列的行为：SQL 校验只允许敏感列以「裸投影且输出列名不变」的形式出现（别名改名、套函数、WHERE/ORDER BY 引用、集合操作都会被拒绝），因此 Worker 可以按结果列名可靠匹配并脱敏。脱敏在 Worker 落库之前完成，持久化结果与 API 返回都只见脱敏后的值。触及敏感列的查询永远不会自动执行，必须经人工审批。`mask` 会保留值长度，`hash` 对低熵值可被字典还原——按数据形态选择策略。
 
 ### 3. 仅在 Worker 环境中设置数据库 URL
 
@@ -89,7 +91,17 @@ cp config/datasources.example.yaml config/datasources.yaml
 
 绝不要将数据库 URL 放入 `.env.example`、API 容器、MCP 客户端配置、源代码管理、日志或提示词中。只有 Worker 可以接收这些密钥。
 
-### 4. 启动服务
+### 4. 选择提案存储后端
+
+提案、审计事件和查询结果存储在独立的元数据存储中，与数据源密钥无关：
+
+- 默认为本地 SQLite，由 `SAFEDB_DB_PATH` 指定，仅用于开发。
+- 生产部署应设置 `SAFEDB_STORE_URL`（例如 `postgresql+psycopg://safedb_app:REPLACE_ME@localhost:5432/safedb`）。API 和 Worker 必须连接同一个存储；首次启动会自动建表，任务认领与审批决策通过事务内条件更新（CAS）保证原子性。
+- SQLite 与 PostgreSQL 存储实现相同的租约恢复、fencing token、审批 CAS 与审计事务语义，已有行为不变。
+
+注意：`SAFEDB_STORE_URL` 是元数据存储凭证，与数据源数据库 URL 是两类不同的秘密。数据源 URL 仍然只能注入 Worker。
+
+### 5. 启动服务
 
 本地开发时，请在不同终端中分别启动 API 和 Worker。两者必须使用相同的 `SAFEDB_DB_PATH` 和数据源配置文件。
 
@@ -142,6 +154,24 @@ docker compose up --build
 Linux 使用绑定挂载时，需预先创建 `data` 目录，并确保容器 UID/GID 10001 可写、其他非授权用户不可读写；否则 SQLite 无法初始化。不要通过将目录设为全员可写来绕过权限错误。
 
 Compose 将 API 端口绑定到 loopback 地址，并且不会把数据库 URL 环境变量传递给 API 服务。Worker 会接收数据源 URL 环境变量。生产环境应使用 Secret Manager/Vault 身份替代基于环境变量的密钥注入，并限制 Worker 的网络出口。Compose 和 SQLite 仅用于本地开发。
+
+## 身份认证
+
+API 支持两种认证模式，由是否设置 `SAFEDB_OIDC_ISSUER` 决定。
+
+**OIDC JWT（生产部署必须）**。设置后，静态令牌被忽略，所有 Agent 和审核请求必须携带由该 Issuer 签发的 Bearer 访问令牌：
+
+- `SAFEDB_OIDC_ISSUER`：例如 `https://idp.example.com/realms/safedb`。
+- `SAFEDB_OIDC_AUDIENCE`：令牌 `aud` 必须匹配；配置 Issuer 时必填。
+- `SAFEDB_OIDC_AGENT_SCOPE`（默认 `safedb:query`）和 `SAFEDB_OIDC_REVIEWER_SCOPE`（默认 `safedb:review`）：令牌必须包含对应角色的 scope，且不得同时包含两个角色的 scope，一种凭证不能同时承担提交与审批两种职责。
+- `SAFEDB_OIDC_ACTOR_CLAIM`（默认 `sub`）：作为 Agent 身份的声明，其值必须出现在数据源配置的 `allowed_agents` 中。
+- `SAFEDB_OIDC_REVIEWER_ACR`（可选）：逗号分隔的 `acr` 值白名单。设置后审核令牌必须携带匹配的 `acr`（例如 `mfa`）；是否强制多因素认证由 IdP 策略决定，网关只校验结果声明。
+
+签名密钥通过 Issuer 的 OIDC 发现文档（`/.well-known/openid-configuration` → `jwks_uri`）获取并缓存，支持密钥轮换。仅接受 RS256/ES256。令牌过期、签名错误、受众或签发方不匹配、缺少角色 scope 或密钥获取失败一律返回 401（fail-closed）。API 访问 IdP 时不使用 HTTP 代理。
+
+**静态令牌（仅限本地开发）**。未设置 `SAFEDB_OIDC_ISSUER` 时启用，即 `.env` 中的 `SAFEDB_AGENT_TOKEN` / `SAFEDB_REVIEWER_TOKEN`，首次使用会记录警告日志。
+
+MCP 客户端继续通过 `SAFEDB_AGENT_TOKEN` 环境变量携带凭据：OIDC 模式下应将其设置为当前有效的 OIDC 访问令牌。令牌续期由 MCP 宿主负责，网关不缓存或刷新令牌。
 
 ## 提交并审核查询
 

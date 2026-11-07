@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from dataclasses import replace
@@ -20,7 +21,7 @@ def setup_service(tmp_path, monkeypatch):
     store = ProposalStore(str(tmp_path / "service.sqlite3"))
     datasource = DataSource(
         "db", "test", "postgres", "UNUSED_TEST_SECRET", "postgres_transaction",
-        frozenset({"public.items"}), frozenset(), True,
+        frozenset({"public.items"}), {}, True,
         1000, 10000, 100, 100000, 1000, frozenset({"agent"}),
     )
     service = QueryService(store, {"db": datasource})
@@ -132,6 +133,34 @@ def test_planning_crosses_expiry_without_issuing_sql(setup_service, monkeypatch,
     adapter.execute_readonly.assert_not_called()
     assert events(store, proposal_id)[-1] == "query.expired"
     adapter.close.assert_called()
+
+
+def test_worker_redacts_sensitive_columns_before_persistence(setup_service):
+    service, store, adapter, _ = setup_service
+    proposal = pending(service, store)
+    service.datasources["db"] = replace(
+        service.datasources["db"],
+        sensitive_columns={"payment_token": "mask"},
+    )
+    adapter.execute_readonly.return_value = {
+        "rows": [{"id": 1, "payment_token": "tok-xyz"},
+                 {"id": 2, "payment_token": "tok-xyz"}],
+        "returned_rows": 2, "result_bytes": 999999,
+        "duration_ms": 1, "scanned_rows": None, "truncated": False,
+    }
+    approve(store, proposal)
+    proposal_id = proposal["proposal_id"]
+    assert run_once(store, service) == 1
+    stored = store.get(proposal_id)
+    assert stored["status"] == "SUCCEEDED"
+    result = stored["result"]
+    assert result["rows"] == [{"id": 1, "payment_token": "*******"},
+                              {"id": 2, "payment_token": "*******"}]
+    assert result["result_bytes"] == sum(
+        len(json.dumps(row, ensure_ascii=False, default=str).encode())
+        for row in result["rows"]
+    )
+    assert result["result_bytes"] < 999999
 
 
 @pytest.mark.parametrize("execution", [False, True], ids=["auto", "manual"])

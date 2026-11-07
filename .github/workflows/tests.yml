@@ -7,6 +7,38 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Ephemeral service containers: credentials exist only for this job.
+      SAFEDB_TEST_POSTGRES_URL: postgresql+psycopg://postgres:ci-throwaway-password@127.0.0.1:5432/salesdb
+      SAFEDB_TEST_POSTGRES_ADMIN_URL: postgresql+psycopg://postgres:ci-throwaway-password@127.0.0.1:5432/postgres
+      SAFEDB_TEST_MYSQL_URL: mysql+pymysql://root:ci-throwaway-password@127.0.0.1:3306/salesdb
+      SAFEDB_TEST_MYSQL_ADMIN_URL: mysql+pymysql://root:ci-throwaway-password@127.0.0.1:3306/salesdb
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-throwaway-password
+          POSTGRES_DB: salesdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d salesdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-throwaway-password
+          MYSQL_DATABASE: salesdb
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pci-throwaway-password"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,3 +47,6 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
       - run: pytest -q
+      # Dedicated step so a broken database service fails the job on its own name
+      # instead of hiding behind skipped tests.
+      - run: pytest tests/test_database_integration.py -q

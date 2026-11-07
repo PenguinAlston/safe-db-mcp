@@ -20,7 +20,7 @@ class DataSource:
     url_env: str
     readonly_mode: str
     allowed_tables: frozenset[str]
-    sensitive_columns: frozenset[str]
+    sensitive_columns: dict[str, str]
     auto_execute: bool
     max_auto_scan_rows: int
     max_hard_scan_rows: int
@@ -121,16 +121,25 @@ def load_datasources(path: str | None = None) -> dict[str, DataSource]:
         if dialect not in {"mysql", "postgres", "oracle"}:
             raise ValueError(f"{datasource_id}: unsupported dialect: {dialect}")
 
-        sensitive_values = item.get("sensitive_columns", [])
-        if not isinstance(sensitive_values, list) or any(
-            not isinstance(value, str) for value in sensitive_values
-        ):
-            raise ValueError(f"{datasource_id}: sensitive_columns must be a list of strings")
-        sensitive = frozenset(normalise_identifier(value) for value in sensitive_values)
-        if any("." in key for key in sensitive):
+        sensitive_raw = item.get("sensitive_columns", {})
+        if not isinstance(sensitive_raw, dict):
             raise ValueError(
-                f"{datasource_id}: sensitive_columns must use unqualified column names"
+                f"{datasource_id}: sensitive_columns must map unqualified column "
+                "names to redaction policies"
             )
+        sensitive: dict[str, str] = {}
+        for name, policy in sensitive_raw.items():
+            key = normalise_identifier(name)
+            if "." in key:
+                raise ValueError(
+                    f"{datasource_id}: sensitive_columns must use unqualified column names"
+                )
+            if policy not in {"mask", "hash", "redact", "null"}:
+                raise ValueError(
+                    f"{datasource_id}: sensitive_columns policy must be one of "
+                    "mask, hash, redact, null"
+                )
+            sensitive[key] = policy
 
         result[datasource_id] = DataSource(
             datasource_id=datasource_id,
