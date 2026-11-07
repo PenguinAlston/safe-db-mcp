@@ -21,7 +21,7 @@ from safe_db_mcp.config import DataSource
 _MAX_MESSAGE_BYTES = 16 * 1024
 _MAX_URL_BYTES = 8 * 1024
 _DEFAULT_SOCKET = "./run/safedb/credentials.sock"
-_DEFAULT_TTL_MINUTES = 450
+_DEFAULT_TTL_MINUTES = 420
 
 
 class CredentialUnavailable(RuntimeError):
@@ -244,9 +244,14 @@ class CredentialSocketServer:
         parent = self.socket_path.parent
         parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         parent_stat = parent.lstat()
-        if not stat.S_ISDIR(parent_stat.st_mode) or parent_stat.st_uid != os.geteuid():
-            raise RuntimeError("Credential socket directory must be owned by the Worker user")
-        os.chmod(parent, 0o700)
+        if (
+            not stat.S_ISDIR(parent_stat.st_mode)
+            or parent_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(parent_stat.st_mode) & 0o077
+        ):
+            raise RuntimeError(
+                "Credential socket directory must be Worker-owned and private (0700)"
+            )
 
         try:
             existing = self.socket_path.lstat()
