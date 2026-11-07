@@ -206,6 +206,19 @@ class ProposalStore:
                 conn.rollback()
                 raise
 
+    def owns_claim(
+        self, proposal_id: str, claim_token: str | None, expected_status: str
+    ) -> bool:
+        if not claim_token:
+            return False
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                """SELECT 1 FROM proposals
+                   WHERE proposal_id=? AND claim_token=? AND status=?""",
+                (proposal_id, claim_token, expected_status),
+            ).fetchone()
+        return row is not None
+
     def recover_stale_claims(self, lease_seconds: int = 600) -> int:
         """Requeue abandoned claims, invalidate their fencing tokens, and audit atomically."""
         if lease_seconds < 1:
