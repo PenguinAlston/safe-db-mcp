@@ -19,12 +19,13 @@ The API and MCP process must not receive database credentials. Only the isolated
 - PostgreSQL: read-only transaction verification and JSON EXPLAIN.
 - MySQL: read-only transaction verification and JSON EXPLAIN.
 - Oracle / SQL Server / others: extension points only, deliberately fail closed until separate reviewed adapters and integration tests exist.
+- CTEs are temporarily rejected because safe scoped resolution must verify both CTE references and every underlying base table. Add CTE support only with dedicated adversarial tests.
 
 ## Quick start (local development only)
 
 Python 3.11+.
 
-1. Install: pip install -e dev dependencies.
+1. Install development dependencies with pip install -e ".[dev]".
 2. Copy .env.example to a local environment file and set long random development tokens. Do not commit it.
 3. Copy config/datasources.example.yaml to config/datasources.yaml, replace sample table names with exact allowlists, and set allowed_agents to your configured Agent ID.
 4. Start the API with SAFEDB_AGENT_TOKEN, SAFEDB_AGENT_ID, SAFEDB_REVIEWER_TOKEN, SAFEDB_REVIEWER_ID and SAFEDB_DB_PATH in its environment. Do not give the API any DB URL variables.
