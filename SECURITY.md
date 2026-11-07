@@ -18,6 +18,10 @@ Native read-only transactions do not replace least-privilege DB users, SQL AST v
 - Worker must have access only to the datasource secrets it needs.
 - Only reviewed adapters with verified database-native read-only transactions may execute.
 - SQL allowlist and read-only enforcement are mandatory even after human approval.
+- SQL comments are rejected before parsing, including MySQL executable comments and hint carriers. MySQL backslash escapes and double-quoted forms are rejected because server `sql_mode` can change lexical semantics.
+- Table references and configured allowlists use simple, unquoted, schema-qualified identifiers; catalog checks use exact identifier equality rather than case-folded first-match lookup.
+- Every worker claim has a unique fencing token. All worker state/result writes require the matching token and expected status; stale workers cannot complete reclaimed work.
+- Claim, lease recovery, proposal creation, worker transitions, and reviewer decisions write their audit event in the same transaction as the state change.
 - Agent and reviewer identities must be distinct and independently authenticated.
 - Reviewer decisions bind to the stored SQL/parameter digest and expire.
 - No SQL or parameter values in application logs.
@@ -31,11 +35,11 @@ Native read-only transactions do not replace least-privilege DB users, SQL AST v
 3. SQL table allowlists are additionally checked against database catalogs: only schema-qualified base tables are accepted. Views, materialized views, foreign tables and Oracle synonyms are rejected. Column-level policies, row/tenant predicates and result redaction remain outstanding.
 4. Add encrypted proposal/result storage, KMS-managed keys, retention/deletion, and an immutable external audit sink.
 5. Oracle row-scan estimates are unavailable; the planner is deliberately skipped to avoid PLAN_TABLE writes, so Oracle auto-execution stays disabled.
-6. Add SQLGlot fuzzing, differential parser tests, denial-of-service tests, database integration tests and container/network penetration tests.
-7. Add rate limits, per-principal quotas, bounded queue depth and active query cancellation. Worker claims now have a configurable stale-lease recovery timeout; configure it above the maximum analysis/execution duration.
+6. SQLGlot is pinned and parser-differential regression tests reject comment carriers, quoted-name collisions and SQLAlchemy bind markers embedded in quoted text. Continue fuzzing and differential parser tests, denial-of-service tests, database integration tests and container/network penetration tests.
+7. Add rate limits, per-principal quotas, bounded queue depth and active query cancellation. Worker claims use fencing tokens and configurable stale-lease recovery; configure the lease above the maximum analysis/execution duration.
 8. Add result redaction and prevent sensitive data from reaching the model.
 9. MySQL read-only transactions have engine-specific semantics including temporary tables; remove temporary-table creation privileges from the DB principal.
-10. Worker uses SQLAlchemy pooling; production must test rollback/reset behavior and session-variable hygiene for selected drivers. Oracle `call_timeout` is per round-trip; the adapter additionally enforces a monotonic wall-clock budget around execute/fetch, but real Oracle integration tests are still required.
+10. Worker uses SQLAlchemy pooling; production must test rollback/reset behavior and session-variable hygiene for selected drivers. Analysis queries now have driver/pool/database-side timeouts. Oracle `call_timeout` is per round-trip; the adapter additionally enforces a monotonic wall-clock budget around execute/fetch, but real Oracle integration tests are still required.
 11. Streaming result retrieval reduces batch buffering, but one oversized row/LOB may still be materialized by the driver before the byte cap is applied.
 
 ## Incident response
