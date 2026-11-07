@@ -1,6 +1,6 @@
-# Testing strategy
+# 测试策略
 
-## Fast local checks
+## 快速本地检查
 
 ```bash
 pip install -e ".[dev]"
@@ -8,47 +8,47 @@ ruff check src tests
 pytest -q
 ```
 
-The GitHub Actions workflow runs the lint and unit-test commands on Python 3.12.
+GitHub Actions 工作流会在 Python 3.12 上运行 lint 和单元测试命令。
 
-## What the current unit tests establish
+## 当前单元测试能够证明什么
 
-The unit suite covers the SQL guard, configuration validation, authentication edge cases, risk assessment, proposal-store lease recovery/fencing, adapter selection, database-catalog response handling, and mocked statement ordering/cleanup.
+单元测试套件覆盖 SQL Guard、配置校验、身份验证边界情况、风险评估、提案存储的租约恢复/fencing、适配器选择、数据库目录响应处理，以及通过 Mock 验证语句顺序和清理行为。
 
-It does **not** prove behavior on a live database server, actual privileges, driver cursor behavior, server-side cancellation, or network failure handling.
+这些测试**不能**证明真实数据库服务器上的行为、实际账号权限、驱动游标行为、服务器端取消能力或网络故障处理。
 
-## Required live database matrix
+## 必需的真实数据库测试矩阵
 
-Run each test against the exact server, SQLAlchemy dialect, DBAPI driver and version intended for deployment. Use a disposable schema and non-production credentials.
+每项测试都必须针对计划部署时使用的确切数据库服务器、SQLAlchemy 方言、DBAPI 驱动及其版本执行。请使用一次性 Schema 和非生产凭证。
 
-| Area | MySQL 8 / PyMySQL | PostgreSQL 16 / psycopg | Oracle 19c / python-oracledb |
+| 测试领域 | MySQL 8 / PyMySQL | PostgreSQL 16 / psycopg | Oracle 19c / python-oracledb |
 |---|---|---|---|
-| Native read-only activation | Verify transaction mode on the server | Verify transaction mode on the server | Verify first-statement `SET TRANSACTION READ ONLY` behavior |
-| DML / DDL denial | Test ordinary tables and temporary-table exception | Test DML and DDL rejection | Test DML and DDL rejection |
-| Object catalog | Base table vs view/temp table | relkind table/partition vs view/foreign table | table vs view/synonym/external table |
-| Timeouts | statement timeout, read timeout, pool wait | statement timeout, connect timeout, pool wait | `call_timeout`, connect timeout, monotonic execution/fetch deadline |
-| Connection hygiene | rollback, `max_execution_time` reset, incomplete SSCursor invalidation | rollback, `statement_timeout` transaction-local cleanup | rollback, `call_timeout` reset, cancellation |
-| Result limits | row/byte cap and interrupted stream cleanup | row/byte cap and interrupted stream cleanup | row/byte cap and interrupted stream cleanup |
-| Pool reuse | run safe query after success/failure/truncation | run safe query after success/failure | run safe query after success/failure/cancel |
+| 启用原生只读模式 | 验证服务器上的事务模式 | 验证服务器上的事务模式 | 验证第一条语句必须为 `SET TRANSACTION READ ONLY` |
+| 拒绝 DML / DDL | 测试普通表及临时表例外 | 测试拒绝 DML 和 DDL | 测试拒绝 DML 和 DDL |
+| 数据库对象目录 | 区分基表、视图和临时表 | 区分 relkind 中的表/分区与视图/外部表 | 区分表、视图、同义词和外部表 |
+| 超时 | 语句超时、读取超时、连接池等待 | 语句超时、连接超时、连接池等待 | `call_timeout`、连接超时、单调时钟执行/获取截止时间 |
+| 连接卫生 | 回滚、重置 `max_execution_time`、使未完成的 SSCursor 失效 | 回滚、事务级 `statement_timeout` 清理 | 回滚、重置 `call_timeout`、取消操作 |
+| 结果限制 | 行数/字节数上限，以及流中断后的清理 | 行数/字节数上限，以及流中断后的清理 | 行数/字节数上限，以及流中断后的清理 |
+| 连接池复用 | 成功/失败/截断后运行安全查询 | 成功/失败后运行安全查询 | 成功/失败/取消后运行安全查询 |
 
-## Security regression payloads
+## 安全回归测试载荷
 
-For each dialect, verify fail-closed behavior for:
+针对每种数据库方言，都应验证以下输入会采取 fail-closed（默认拒绝）行为：
 
-- Multiple statements, DML/DDL, `SELECT INTO`, `FOR UPDATE`, lock clauses and forbidden command nodes.
-- SQL comments and dialect-specific comment carriers, especially MySQL executable comments and `--1`.
-- Quoted/ambiguous identifiers, schema/cross-catalog references and unapproved object names.
-- Unsupported functions, wildcard projections, CTEs until safe name resolution exists, and side-effecting database features.
-- Bind marker tokens inside quoted string forms that may be reinterpreted by SQLAlchemy's `text()` parser.
-- Temporary objects and database-specific read-only transaction exceptions.
+- 多条语句、DML/DDL、`SELECT INTO`、`FOR UPDATE`、锁定子句以及禁止的命令节点。
+- SQL 注释及方言特有的注释载体，尤其是 MySQL 可执行注释和 `--1`。
+- 带引号或有歧义的标识符、Schema/跨目录引用，以及未获批准的对象名。
+- 不支持的函数、通配符投影、尚未实现安全名称解析前的 CTE，以及有副作用的数据库功能。
+- 位于带引号字符串形式内部、但可能被 SQLAlchemy 的 `text()` 解析器重新解释为绑定标记的 token。
+- 临时对象，以及数据库原生只读事务的特定例外。
 
-## Concurrency and lifecycle tests
+## 并发与生命周期测试
 
-- Reclaim a stale claim and verify the previous token can no longer change proposal state.
-- Invalidate an approval after a risk snapshot change and verify no result can be published under the old approval.
-- Kill a worker during analysis and execution, then verify recovery and audit records.
-- Verify reviewer decision compare-and-swap under simultaneous approvals/rejections.
-- Verify every proposal state transition and its audit event are committed together.
+- 重新认领过期任务，并验证旧 token 无法再修改提案状态。
+- 风险快照发生变化后使审批失效，并验证旧审批不能再发布结果。
+- 在分析和执行过程中终止 Worker，然后验证恢复行为和审计记录。
+- 在并发批准/拒绝时，验证 Reviewer 决策的 compare-and-swap（比较并交换）行为。
+- 验证每一次提案状态转换都与其审计事件在同一事务中提交。
 
-## Evidence required before enabling a datasource
+## 启用数据源前必须保留的证据
 
-Record the database server version, SQLAlchemy version, driver version, test schema, grants used, commands/test cases executed, pass/fail results, and any residual driver limitations. Do not infer live-server safety from mocked tests or from a successful `SELECT 1`.
+记录数据库服务器版本、SQLAlchemy 版本、驱动版本、测试 Schema、使用的授权、执行的命令/测试用例、通过/失败结果，以及剩余的驱动限制。不能根据 Mock 测试或一次成功的 `SELECT 1` 就推断真实数据库环境是安全的。

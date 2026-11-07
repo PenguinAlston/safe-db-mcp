@@ -1,47 +1,47 @@
-# Security policy and production checklist
+# 安全政策与生产检查清单
 
-This project is an early security prototype. Do not use privileged production database credentials with it yet.
+本项目目前处于早期安全原型阶段。现阶段请勿使用具有生产权限的数据库凭证。
 
-## Native read-only enforcement
+## 原生只读约束
 
-Every user query must run in a fresh, clean database transaction with native read-only mode enabled before the first user statement.
+每条用户查询都必须在一个全新的、干净的数据库事务中执行，并且必须在第一条用户语句执行前启用数据库原生只读模式。
 
-- MySQL 8: START TRANSACTION READ ONLY, then verify @@transaction_read_only = 1. MySQL still permits DML against TEMPORARY tables in read-only transactions. SQL policy must reject temporary objects, and the DB principal must not have CREATE TEMPORARY TABLES.
-- PostgreSQL 16: SET TRANSACTION READ ONLY, then verify SHOW transaction_read_only is on. Roll back after result retrieval.
-- Oracle 19c: SET TRANSACTION READ ONLY must be the first statement in the transaction. Oracle has no directly equivalent transaction_read_only status variable. Successful activation followed by a harmless SELECT is the runtime capability check; activation is repeated on every execution connection. This is not an account-level read-only grant.
+- **MySQL 8：** 执行 `START TRANSACTION READ ONLY`，随后验证 `@@transaction_read_only = 1`。MySQL 只读事务仍允许对 TEMPORARY 表执行 DML。SQL 策略必须拒绝临时对象，数据库账号不得拥有 `CREATE TEMPORARY TABLES` 权限。
+- **PostgreSQL 16：** 执行 `SET TRANSACTION READ ONLY`，随后验证 `SHOW transaction_read_only` 返回 on。获取结果后回滚事务。
+- **Oracle 19c：** `SET TRANSACTION READ ONLY` 必须是该事务中的第一条语句。Oracle 没有直接等价的 `transaction_read_only` 状态变量。成功激活只读事务后执行一条无副作用的 SELECT，可作为运行时能力检查；每个执行连接都必须重新激活该模式。这并不等同于账号级只读授权。
 
-Native read-only transactions do not replace least-privilege DB users, SQL AST validation, function allowlists, or network isolation. Do not allow user-defined functions, stored procedures, side-effecting extensions, or arbitrary external calls through SELECT.
+原生只读事务不能替代最小权限数据库用户、SQL AST 校验、函数白名单或网络隔离。不要允许用户通过 SELECT 调用用户自定义函数、存储过程、有副作用的扩展或任意外部调用。
 
-## Non-negotiable controls
+## 不可妥协的安全控制
 
-- API and MCP process must not receive database URL variables.
-- Worker must have access only to the datasource secrets it needs.
-- Only reviewed adapters with verified database-native read-only transactions may execute.
-- SQL allowlist and read-only enforcement are mandatory even after human approval.
-- SQL comments are rejected before parsing, including MySQL executable comments and hint carriers. MySQL backslash escapes and double-quoted forms are rejected because server `sql_mode` can change lexical semantics.
-- Table references and configured allowlists use simple, unquoted, schema-qualified identifiers; catalog checks use exact identifier equality rather than case-folded first-match lookup.
-- Every worker claim has a unique fencing token. All worker state/result writes require the matching token and expected status; stale workers cannot complete reclaimed work.
-- Claim, lease recovery, proposal creation, worker transitions, and reviewer decisions write their audit event in the same transaction as the state change.
-- Agent and reviewer identities must be distinct and independently authenticated.
-- Reviewer decisions bind to the stored SQL/parameter digest and expire.
-- No SQL or parameter values in application logs.
-- Restrict Worker network egress to explicitly configured DB hosts and ports.
-- Never enable a datasource until database-specific integration tests prove the read-only behavior.
+- API 和 MCP 进程不得接收数据库 URL 环境变量。
+- Worker 只能访问其所需的数据源密钥。
+- 只有经过审核且已验证数据库原生只读事务的适配器才允许执行查询。
+- 即使经过人工审批，SQL 白名单和只读强制措施仍然必须执行。
+- 解析前拒绝 SQL 注释，包括 MySQL 可执行注释和提示（hint）载体。由于服务器 `sql_mode` 会改变词法语义，因此拒绝 MySQL 反斜杠转义形式和双引号形式。
+- 表引用和配置白名单必须使用简单、不带引号且带 Schema 的标识符；目录检查必须使用精确标识符匹配，不得使用大小写折叠后的首次匹配。
+- 每次 Worker 任务认领都必须生成唯一 fencing token。所有 Worker 状态/结果写入都必须匹配当前 token 和预期状态；旧 Worker 不得完成已经被重新认领的任务。
+- 任务认领、租约恢复、提案创建、Worker 状态转换和审核员决策，都必须在状态变更所在的同一事务中写入对应审计事件。
+- Agent 和 Reviewer 必须使用不同身份，并分别进行身份验证。
+- Reviewer 决策必须绑定到已存储的 SQL/参数摘要，并且应有有效期。
+- 应用日志中不得包含 SQL 或参数值。
+- 将 Worker 的网络出口限制为明确配置的数据库主机和端口。
+- 在数据库专属集成测试证明只读行为之前，绝不要启用任何数据源。
 
-## Known gaps
+## 已知安全缺口
 
-1. Auth uses single-principal static bearer tokens for local development only. Replace with OIDC JWT validation, issuer/audience/scope checks, per-Agent principal mapping and MFA-backed reviewer auth.
-2. SQLite is not suitable for multi-replica workers. Move proposals and audit to PostgreSQL with atomic claim/locking semantics.
-3. SQL table allowlists are additionally checked against database catalogs: only schema-qualified base tables are accepted. Views, materialized views, foreign tables and Oracle synonyms are rejected. Column-level policies, row/tenant predicates and result redaction remain outstanding.
-4. Add encrypted proposal/result storage, KMS-managed keys, retention/deletion, and an immutable external audit sink.
-5. Oracle row-scan estimates are unavailable; the planner is deliberately skipped to avoid PLAN_TABLE writes, so Oracle auto-execution stays disabled.
-6. SQLGlot is pinned and parser-differential regression tests reject comment carriers, quoted-name collisions and SQLAlchemy bind markers embedded in quoted text. Continue fuzzing and differential parser tests, denial-of-service tests, database integration tests and container/network penetration tests.
-7. Add rate limits, per-principal quotas, bounded queue depth and active query cancellation. Worker claims use fencing tokens and configurable stale-lease recovery; configure the lease above the maximum analysis/execution duration.
-8. Add result redaction and prevent sensitive data from reaching the model.
-9. MySQL read-only transactions have engine-specific semantics including temporary tables; remove temporary-table creation privileges from the DB principal.
-10. Worker uses SQLAlchemy pooling; production must test rollback/reset behavior and session-variable hygiene for selected drivers. Analysis queries now have driver/pool/database-side timeouts. Oracle `call_timeout` is per round-trip; the adapter additionally enforces a monotonic wall-clock budget around execute/fetch, but real Oracle integration tests are still required.
-11. Streaming result retrieval reduces batch buffering, but one oversized row/LOB may still be materialized by the driver before the byte cap is applied.
+1. 身份验证目前仅使用单主体静态 Bearer Token，只适用于本地开发。应替换为 OIDC JWT 验证，并增加 issuer/audience/scope 检查、按 Agent 映射主体，以及基于 MFA 的 Reviewer 身份验证。
+2. SQLite 不适合多副本 Worker。应将提案和审计数据迁移到 PostgreSQL，并保留原子认领/锁定语义。
+3. SQL 表白名单还会通过数据库目录进行检查：仅接受带 Schema 的基表。视图、物化视图、外部表和 Oracle 同义词均会被拒绝。列级策略、行/租户过滤条件以及结果脱敏仍未完成。
+4. 增加提案/结果存储加密、由 KMS 管理的密钥、保留/删除策略，以及不可篡改的外部审计存储。
+5. Oracle 无法获得行扫描成本估算；为避免写入 `PLAN_TABLE`，系统有意跳过查询规划，因此 Oracle 自动执行仍保持禁用。
+6. SQLGlot 已固定版本，并通过解析器差异回归测试拒绝注释载体、带引号的名称冲突，以及嵌入带引号文本中的 SQLAlchemy 绑定参数标记。仍需持续开展模糊测试和解析器差异测试、拒绝服务测试、数据库集成测试，以及容器/网络渗透测试。
+7. 增加速率限制、按主体配额、有界队列深度和主动查询取消。Worker 任务认领使用 fencing token 和可配置的过期租约恢复；租约配置必须长于最大分析/执行时长。
+8. 增加结果脱敏，防止敏感数据进入模型上下文。
+9. MySQL 只读事务有特定于引擎的语义，包括临时表行为；必须移除数据库账号创建临时表的权限。
+10. Worker 使用 SQLAlchemy 连接池；生产环境必须针对选定驱动测试回滚/重置行为和会话变量卫生。分析查询目前已增加驱动层、连接池层和数据库端超时。Oracle 的 `call_timeout` 按单次往返生效；适配器还会在 execute/fetch 周围实施单调时钟墙钟预算，但仍必须进行真实 Oracle 集成测试。
+11. 流式结果获取降低了批量缓冲需求，但在字节数限制生效前，驱动仍可能先将一个超大行/LOB 完整加载到内存。
 
-## Incident response
+## 事件响应
 
-Rotate all datasource credentials immediately if a Worker host, container, process dump, environment file or Secret Manager identity is suspected compromised. Do not place secrets in GitHub issues, logs or model prompts.
+如果怀疑 Worker 主机、容器、进程转储、环境文件或 Secret Manager 身份遭到入侵，应立即轮换所有数据源凭证。不要将密钥放入 GitHub Issue、日志或模型提示词。
