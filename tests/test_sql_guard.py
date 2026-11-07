@@ -61,3 +61,15 @@ def test_unknown_function_is_rejected(datasource):
         validate_sql(
             "SELECT dangerous_udf(id) FROM public.orders LIMIT 5", datasource, {}
         )
+
+
+
+def test_union_branch_limit_does_not_count_as_global_limit(datasource):
+    result = validate_sql(
+        "(SELECT id FROM public.orders LIMIT 1) UNION ALL "
+        "SELECT id FROM public.customers",
+        datasource,
+        {},
+    )
+    assert result.has_top_level_limit is False
+    assert result.limit_value is None
