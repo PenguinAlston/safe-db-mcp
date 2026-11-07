@@ -7,7 +7,10 @@ import uuid
 from datetime import UTC, datetime
 from contextlib import closing
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from safe_db_mcp.store_pg import PostgresProposalStore
 
 
 class ProposalStore:
@@ -370,3 +373,14 @@ class ProposalStore:
             item[target] = json.loads(value) if value else None
         item["sql"] = item.pop("sql_text")
         return item
+
+
+def create_store() -> ProposalStore | PostgresProposalStore:
+    # SAFEDB_STORE_URL selects the PostgreSQL store for production deployments.
+    # The store holds proposals and results, never datasource credentials.
+    url = os.getenv("SAFEDB_STORE_URL", "")
+    if url:
+        from safe_db_mcp.store_pg import PostgresProposalStore
+
+        return PostgresProposalStore(url)
+    return ProposalStore()

@@ -7,6 +7,8 @@ services:
     environment:
       SAFEDB_DB_PATH: /data/safedb.sqlite3
       SAFEDB_DATASOURCES_FILE: /app/config/datasources.yaml
+      # Metadata-store URL (proposals, audit, results); never a datasource URL.
+      SAFEDB_STORE_URL: ${SAFEDB_STORE_URL:-}
       SAFEDB_AGENT_TOKEN: ${SAFEDB_AGENT_TOKEN:?set SAFEDB_AGENT_TOKEN}
       SAFEDB_REVIEWER_TOKEN: ${SAFEDB_REVIEWER_TOKEN:?set SAFEDB_REVIEWER_TOKEN}
       SAFEDB_AGENT_ID: ${SAFEDB_AGENT_ID:-local-agent}
@@ -22,6 +24,7 @@ services:
     environment:
       SAFEDB_DB_PATH: /data/safedb.sqlite3
       SAFEDB_DATASOURCES_FILE: /app/config/datasources.yaml
+      SAFEDB_STORE_URL: ${SAFEDB_STORE_URL:-}
       SAFEDB_WORKER_INTERVAL_SECONDS: 1
       MYSQL8_URL: ${MYSQL8_URL:-}
       PG16_URL: ${PG16_URL:-}

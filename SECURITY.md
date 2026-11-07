@@ -34,7 +34,7 @@
 ## 已知安全缺口
 
 1. 身份验证目前仅使用单主体静态 Bearer Token，只适用于本地开发。应替换为 OIDC JWT 验证，并增加 issuer/audience/scope 检查、按 Agent 映射主体，以及基于 MFA 的 Reviewer 身份验证。
-2. SQLite 不适合多副本 Worker。应将提案和审计数据迁移到 PostgreSQL，并保留原子认领/锁定语义。
+2. 默认存储为 SQLite，仅适用于单机开发。生产部署必须设置 `SAFEDB_STORE_URL` 使用 PostgreSQL 存储（与 SQLite 存储实现相同的原子认领、fencing token、审批 CAS 与审计事务语义），并对该存储实施网络隔离、访问控制与备份。
 3. SQL 表白名单还会通过数据库目录检查。MySQL 仅接受 InnoDB 基表；PostgreSQL 拒绝分区父表、带继承子表的表及非内置基础类型列。视图、物化视图、外部表和 Oracle 同义词不在支持范围。完整列级授权、行/租户过滤条件以及结果脱敏仍未完成；必须信任数据库对象管理方，目录检查与执行之间的并发 DDL 仍需通过权限隔离控制。
 4. 增加提案/结果存储加密、由 KMS 管理的密钥、保留/删除策略，以及不可篡改的外部审计存储。
 5. Oracle 无法获得行扫描成本估算；为避免写入 `PLAN_TABLE`，系统有意跳过查询规划，因此 Oracle 自动执行仍保持禁用。

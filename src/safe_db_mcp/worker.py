@@ -7,13 +7,13 @@ import time
 from safe_db_mcp.adapters.factory import AdapterUnavailable
 from safe_db_mcp.config import load_datasources
 from safe_db_mcp.service import QueryService, iso, now
-from safe_db_mcp.store import ProposalStore
+from safe_db_mcp.store import create_store
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("safedb.worker")
 
 
-def run_once(store: ProposalStore, service: QueryService) -> int:
+def run_once(store, service: QueryService) -> int:
     lease_seconds = int(os.getenv("SAFEDB_WORKER_LEASE_SECONDS", "600"))
     if lease_seconds < 1:
         raise ValueError("SAFEDB_WORKER_LEASE_SECONDS must be positive")
@@ -83,7 +83,7 @@ def run_once(store: ProposalStore, service: QueryService) -> int:
 
 
 def main():
-    store = ProposalStore()
+    store = create_store()
     service = QueryService(store, load_datasources())
     interval = float(os.getenv("SAFEDB_WORKER_INTERVAL_SECONDS", "1"))
     if interval <= 0:

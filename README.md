@@ -89,7 +89,17 @@ cp config/datasources.example.yaml config/datasources.yaml
 
 绝不要将数据库 URL 放入 `.env.example`、API 容器、MCP 客户端配置、源代码管理、日志或提示词中。只有 Worker 可以接收这些密钥。
 
-### 4. 启动服务
+### 4. 选择提案存储后端
+
+提案、审计事件和查询结果存储在独立的元数据存储中，与数据源密钥无关：
+
+- 默认为本地 SQLite，由 `SAFEDB_DB_PATH` 指定，仅用于开发。
+- 生产部署应设置 `SAFEDB_STORE_URL`（例如 `postgresql+psycopg://safedb_app:REPLACE_ME@localhost:5432/safedb`）。API 和 Worker 必须连接同一个存储；首次启动会自动建表，任务认领与审批决策通过事务内条件更新（CAS）保证原子性。
+- SQLite 与 PostgreSQL 存储实现相同的租约恢复、fencing token、审批 CAS 与审计事务语义，已有行为不变。
+
+注意：`SAFEDB_STORE_URL` 是元数据存储凭证，与数据源数据库 URL 是两类不同的秘密。数据源 URL 仍然只能注入 Worker。
+
+### 5. 启动服务
 
 本地开发时，请在不同终端中分别启动 API 和 Worker。两者必须使用相同的 `SAFEDB_DB_PATH` 和数据源配置文件。
 

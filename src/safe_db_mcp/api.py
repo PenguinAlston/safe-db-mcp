@@ -8,9 +8,9 @@ from safe_db_mcp.auth import require_agent, require_reviewer
 from safe_db_mcp.config import load_datasources
 from safe_db_mcp.models import DecisionRequest, PrepareQueryRequest, Principal
 from safe_db_mcp.service import QueryService, now
-from safe_db_mcp.store import ProposalStore
+from safe_db_mcp.store import create_store
 
-store = ProposalStore()
+store = create_store()
 datasources = load_datasources()
 service = QueryService(store, datasources)
 app = FastAPI(title="SafeDB-MCP API", version="0.1.0")
