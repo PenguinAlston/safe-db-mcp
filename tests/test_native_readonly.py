@@ -119,7 +119,7 @@ def test_mysql_verify_checks_mode_and_resets_session_timeout():
         "SELECT @@transaction_read_only",
         "SET SESSION max_execution_time = 0",
     ]
-    connection.rollback.assert_called_once()
+    assert connection.rollback.call_count == 2
 
 
 def test_oracle_explain_is_disabled_to_avoid_plan_table_write():
