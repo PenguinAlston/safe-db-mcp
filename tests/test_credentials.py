@@ -154,3 +154,38 @@ def test_env_credential_datasource_is_not_managed_by_local_store():
     credentials = InMemoryCredentialManager({"mysql": env_datasource})
     assert credentials.is_available("mysql")
     assert credentials.status("mysql")["state"] == "EXTERNAL"
+
+
+
+def test_failed_candidate_validation_preserves_previous_credential():
+    def validator(datasource, database_url):
+        return database_url.endswith("/valid")
+
+    credentials = InMemoryCredentialManager(
+        {"pg": datasource()}, validator=validator
+    )
+    expiry = datetime.now(UTC) + timedelta(hours=2)
+    first = "postgresql+psycopg://user:secret@db.internal/valid"
+    rejected = "postgresql+psycopg://user:secret@db.internal/invalid"
+    credentials.set_credential("pg", first, expiry)
+    with pytest.raises(ValueError, match="validation failed"):
+        credentials.set_credential("pg", rejected, expiry)
+    assert credentials.get_url("pg") == first
+    assert credentials.status("pg")["version"] == 1
+
+
+def test_candidate_validator_receives_datasource_and_is_required_before_rotation():
+    calls = []
+
+    def validator(datasource_arg, database_url):
+        calls.append((datasource_arg.datasource_id, database_url))
+        return True
+
+    credentials = InMemoryCredentialManager(
+        {"pg": datasource()}, validator=validator
+    )
+    secret = "postgresql+psycopg://user:password@db.internal/app"
+    credentials.set_credential(
+        "pg", secret, datetime.now(UTC) + timedelta(hours=2)
+    )
+    assert calls == [("pg", secret)]
