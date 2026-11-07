@@ -50,7 +50,7 @@ def _reject_ambiguous_lexemes(sql: str, dialect: str) -> None:
         raise SQLRejected("SQL comments are disabled")
     # Backslash quoting/escaping is mode-dependent across supported engines.
     # Reject it globally so the SQLAlchemy text() scanner and server lexer agree.
-    if "\\\\" in sql:
+    if "\\" in sql:
         raise SQLRejected("Backslash escapes are disabled")
     if dialect == "mysql":
         # MySQL lexical interpretation changes with sql_mode. Require a narrow,
@@ -68,7 +68,7 @@ def _reject_bind_markers_in_quoted_text(sql: str) -> None:
     while i < len(sql):
         char = sql[i]
         if quote is not None:
-            if char == ":" and i + 1 < len(sql) and re.match(r"[A-Za-z_]", sql[i + 1]):
+            if char == ":" and i + 1 < len(sql) and re.match(r"\\w", sql[i + 1]):
                 raise SQLRejected("Bind markers inside quoted SQL text are disabled")
             if char == quote:
                 if i + 1 < len(sql) and sql[i + 1] == quote:
@@ -90,7 +90,7 @@ def _reject_bind_markers_in_quoted_text(sql: str) -> None:
                 if end < 0:
                     raise SQLRejected("Unterminated dollar-quoted SQL text")
                 inner = sql[i + len(delimiter):end]
-                if re.search(r"(?<!:):[A-Za-z_0-9]+?", inner):
+                if re.search(r"(?<!:):[A-Za-z_0-9]+", inner):
                     raise SQLRejected(
                         "Bind markers inside quoted SQL text are disabled"
                     )
