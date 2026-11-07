@@ -7,7 +7,7 @@ The API and MCP process must not receive database credentials. Only the isolated
 ## Security model
 
 - Agent submits a free-form SELECT, purpose, datasource ID and bind parameters.
-- API validates SQL through SQLGlot AST, applies the datasource table allowlist and stores a proposal.
+- API validates SQL through SQLGlot AST, applies the datasource table allowlist and datasource-specific Agent allowlist, then stores a proposal.
 - A separate worker resolves credentials, verifies database-native read-only mode, runs EXPLAIN and calculates risk.
 - LOW risk auto-executes only if every gate passes. MEDIUM/HIGH requires a separate human reviewer.
 - Approval binds to the SQL + parameter hash, requester and expiry. The worker reparses, rechecks read-only mode and replans before execution.
@@ -25,11 +25,11 @@ The API and MCP process must not receive database credentials. Only the isolated
 Python 3.11+.
 
 1. Install: pip install -e dev dependencies.
-2. Copy .env.example to .env and set long random local-only tokens. Never commit .env.
-3. Copy config/datasources.example.yaml to config/datasources.yaml, define exact table allowlists, and inject database URL variables into the worker environment only.
-4. Start API: uvicorn safe_db_mcp.api:app --host 127.0.0.1 --port 8080
-5. Start worker: python -m safe_db_mcp.worker
-6. Start MCP: python -m safe_db_mcp.mcp_server
+2. Copy .env.example to a local environment file and set long random development tokens. Do not commit it.
+3. Copy config/datasources.example.yaml to config/datasources.yaml, replace sample table names with exact allowlists, and set allowed_agents to your configured Agent ID.
+4. Start the API with SAFEDB_AGENT_TOKEN, SAFEDB_AGENT_ID, SAFEDB_REVIEWER_TOKEN, SAFEDB_REVIEWER_ID and SAFEDB_DB_PATH in its environment. Do not give the API any DB URL variables.
+5. Start the worker separately with SAFEDB_DB_PATH, SAFEDB_DATASOURCES_FILE and the DB URL variables or Secret Manager identity needed by that worker only.
+6. Start MCP with SAFEDB_API_URL and the matching SAFEDB_AGENT_TOKEN.
 
 The MVP authenticator uses one Agent token and one reviewer token. The MCP process sends its Agent token to the API; deploy a distinct MCP instance/token per Agent identity. Replace this development authenticator with OIDC/OAuth JWT validation, audience/scope checks, per-Agent identity mapping and MFA-backed reviewer identity before remote or multi-user production use.
 
@@ -51,6 +51,6 @@ The Docker Compose file intentionally does not inject database URL variables int
 
 ## Tests
 
-Run pytest. Tests cover SQL AST rejection and risk gates, not database-native enforcement. Run integration tests against every enabled database/version before deployment.
+Run pytest. Tests cover AST rejection and risk gates, not database-native enforcement. Run integration tests against every enabled database/version before deployment.
 
 See SECURITY.md for the full checklist.
