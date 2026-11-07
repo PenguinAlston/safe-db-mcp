@@ -62,7 +62,8 @@ class ProposalStore:
                 result_json TEXT,
                 error_code TEXT,
                 claimed_at TEXT,
-                claim_token TEXT
+                claim_token TEXT,
+                review_token TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_proposals_status
                 ON proposals(status, created_at);
@@ -75,17 +76,37 @@ class ProposalStore:
                 details_json TEXT NOT NULL
             );
             """)
-            columns = {
-                row[1] for row in conn.execute("PRAGMA table_info(proposals)").fetchall()
-            }
-            if "claimed_at" not in columns:
-                conn.execute("ALTER TABLE proposals ADD COLUMN claimed_at TEXT")
-            if "claim_token" not in columns:
-                conn.execute("ALTER TABLE proposals ADD COLUMN claim_token TEXT")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_proposals_claimed_at "
-                "ON proposals(status, claimed_at)"
-            )
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(proposals)").fetchall()
+                }
+                if "claimed_at" not in columns:
+                    conn.execute("ALTER TABLE proposals ADD COLUMN claimed_at TEXT")
+                if "claim_token" not in columns:
+                    conn.execute("ALTER TABLE proposals ADD COLUMN claim_token TEXT")
+                if "review_token" not in columns:
+                    conn.execute("ALTER TABLE proposals ADD COLUMN review_token TEXT")
+                # Legacy pending reviews need a fresh round. Never bind a legacy approval.
+                pending = conn.execute(
+                    "SELECT proposal_id FROM proposals "
+                    "WHERE status='PENDING_APPROVAL' AND review_token IS NULL"
+                ).fetchall()
+                for row in pending:
+                    conn.execute(
+                        "UPDATE proposals SET review_token=?, approval_json=NULL "
+                        "WHERE proposal_id=? AND status='PENDING_APPROVAL' "
+                        "AND review_token IS NULL",
+                        (uuid.uuid4().hex, row["proposal_id"]),
+                    )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_proposals_claimed_at "
+                    "ON proposals(status, claimed_at)"
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     def create(
         self,
@@ -122,13 +143,44 @@ class ProposalStore:
             ).fetchone()
         return self._decode(row) if row else None
 
-    def list_status(self, status: str, limit: int = 20) -> list[dict[str, Any]]:
+    def list_status(
+        self, status: str, limit: int = 20, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        # Filter at read time as well as sweeping: a review can expire between the two.
+        expiry_filter = (
+            " AND julianday(expires_at) > julianday('now')"
+            if status == "PENDING_APPROVAL" else ""
+        )
         with closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT * FROM proposals WHERE status=? ORDER BY created_at LIMIT ?",
-                (status, limit),
+                f"SELECT * FROM proposals WHERE status=?{expiry_filter} "
+                "ORDER BY created_at, proposal_id LIMIT ? OFFSET ?",
+                (status, limit, offset),
             ).fetchall()
         return [self._decode(row) for row in rows]
+
+    def expire_pending_approvals(self) -> int:
+        """Expire only idle reviews, committing their audit events in the same transaction."""
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                expired = conn.execute(
+                    """UPDATE proposals
+                       SET status='EXPIRED', error_code='PROPOSAL_EXPIRED'
+                       WHERE status='PENDING_APPROVAL'
+                         AND julianday(expires_at) <= julianday('now')
+                       RETURNING proposal_id"""
+                ).fetchall()
+                for row in expired:
+                    self._insert_audit(conn, row["proposal_id"], {
+                        "event_type": "query.expired",
+                        "actor_id": "worker",
+                    })
+                conn.commit()
+                return len(expired)
+            except Exception:
+                conn.rollback()
+                raise
 
     def claim(self, proposal_id: str, expected: str, claimed: str) -> str | None:
         """Claim work and return a per-claim fencing token, or None on a lost race."""
@@ -174,6 +226,10 @@ class ProposalStore:
             raise ValueError("Unsupported proposal update field")
         if not fields:
             return False
+        if fields.get("status") == "PENDING_APPROVAL":
+            # Only the store can mint a review round; invalidate any previous decision.
+            fields["review_token"] = uuid.uuid4().hex
+            fields["approval_json"] = None
         if "status" in fields and fields["status"] not in {"ANALYZING_WORKER", "EXECUTING"}:
             fields["claimed_at"] = None
             fields["claim_token"] = None
@@ -270,8 +326,11 @@ class ProposalStore:
             try:
                 cur = conn.execute(
                     """UPDATE proposals SET status=?, approval_json=?
-                       WHERE proposal_id=? AND status=?""",
-                    (status, json.dumps(approval), proposal_id, expected),
+                       WHERE proposal_id=? AND status=?
+                         AND review_token=? AND review_token <> '' AND sql_hash=?
+                         AND julianday(expires_at) > julianday('now')""",
+                    (status, json.dumps(approval), proposal_id, expected,
+                     approval.get("review_token"), approval.get("sql_hash")),
                 )
                 if cur.rowcount == 1 and audit_event:
                     self._insert_audit(conn, proposal_id, audit_event)
