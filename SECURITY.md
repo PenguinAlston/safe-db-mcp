@@ -2,6 +2,16 @@
 
 This project is an early security prototype. Do not use privileged production database credentials with it yet.
 
+## Native read-only enforcement
+
+Every user query must run in a fresh, clean database transaction with native read-only mode enabled before the first user statement.
+
+- MySQL 8: START TRANSACTION READ ONLY, then verify @@transaction_read_only = 1. MySQL still permits DML against TEMPORARY tables in read-only transactions. SQL policy must reject temporary objects, and the DB principal must not have CREATE TEMPORARY TABLES.
+- PostgreSQL 16: SET TRANSACTION READ ONLY, then verify SHOW transaction_read_only is on. Roll back after result retrieval.
+- Oracle 19c: SET TRANSACTION READ ONLY must be the first statement in the transaction. Oracle has no directly equivalent transaction_read_only status variable. Successful activation followed by a harmless SELECT is the runtime capability check; activation is repeated on every execution connection. This is not an account-level read-only grant.
+
+Native read-only transactions do not replace least-privilege DB users, SQL AST validation, function allowlists, or network isolation. Do not allow user-defined functions, stored procedures, side-effecting extensions, or arbitrary external calls through SELECT.
+
 ## Non-negotiable controls
 
 - API and MCP process must not receive database URL variables.
@@ -20,12 +30,12 @@ This project is an early security prototype. Do not use privileged production da
 2. SQLite is not suitable for multi-replica workers. Move proposals and audit to PostgreSQL with atomic claim/locking semantics.
 3. Table-level allowlist only; implement column-level policies, row/tenant predicates and view dependency resolution.
 4. Add encrypted proposal/result storage, KMS-managed keys, retention/deletion, and an immutable external audit sink.
-5. Implement and test each additional database adapter against exact server and driver versions.
+5. Oracle row-scan estimates are unavailable; the planner is deliberately skipped to avoid PLAN_TABLE writes, so Oracle auto-execution stays disabled.
 6. Add SQLGlot fuzzing, differential parser tests, denial-of-service tests, database integration tests and container/network penetration tests.
 7. Add rate limits, per-principal quotas, bounded queue depth, cancellation and worker lease recovery.
 8. Add result redaction and prevent sensitive data from reaching the model.
-9. MySQL read-only transactions have engine-specific semantics (including temporary tables); do not widen the SQL grammar without dialect-specific review.
-10. Worker uses SQLAlchemy pooling; production must test rollback/reset behavior and session-variable hygiene for the selected drivers.
+9. MySQL read-only transactions have engine-specific semantics including temporary tables; remove temporary-table creation privileges from the DB principal.
+10. Worker uses SQLAlchemy pooling; production must test rollback/reset behavior and session-variable hygiene for selected drivers.
 
 ## Incident response
 
