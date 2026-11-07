@@ -23,6 +23,7 @@ class DataSource:
     max_result_rows: int
     max_result_bytes: int
     timeout_ms: int
+    allowed_agents: frozenset[str] = frozenset()
 
     def database_url(self) -> str:
         value = os.getenv(self.url_env, "").strip()
@@ -58,6 +59,9 @@ def load_datasources(path: str | None = None) -> dict[str, DataSource]:
         )
         if not allowed:
             raise ValueError(f"{datasource_id}: allowed_tables must not be empty")
+        agents = frozenset(str(x) for x in item.get("allowed_agents", []))
+        if not agents:
+            raise ValueError(f"{datasource_id}: allowed_agents must not be empty")
         result[datasource_id] = DataSource(
             datasource_id=datasource_id,
             name=str(item.get("name", datasource_id)),
@@ -74,5 +78,6 @@ def load_datasources(path: str | None = None) -> dict[str, DataSource]:
             max_result_rows=int(item.get("max_result_rows", 100)),
             max_result_bytes=int(item.get("max_result_bytes", 524288)),
             timeout_ms=int(item.get("timeout_ms", 5000)),
+            allowed_agents=agents,
         )
     return result
