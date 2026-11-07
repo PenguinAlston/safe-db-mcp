@@ -48,6 +48,10 @@ def _reject_ambiguous_lexemes(sql: str, dialect: str) -> None:
     # optimizer hints, --1 parser differentials, and ordinary comment carriers.
     if "--" in sql or "/*" in sql or "*/" in sql:
         raise SQLRejected("SQL comments are disabled")
+    # Backslash quoting/escaping is mode-dependent across supported engines.
+    # Reject it globally so the SQLAlchemy text() scanner and server lexer agree.
+    if "\\\\" in sql:
+        raise SQLRejected("Backslash escapes are disabled")
     if dialect == "mysql":
         # MySQL lexical interpretation changes with sql_mode. Require a narrow,
         # mode-independent subset instead of guessing the server's active mode.
@@ -86,7 +90,7 @@ def _reject_bind_markers_in_quoted_text(sql: str) -> None:
                 if end < 0:
                     raise SQLRejected("Unterminated dollar-quoted SQL text")
                 inner = sql[i + len(delimiter):end]
-                if re.search(r"(?<!:):[A-Za-z_][A-Za-z_0-9]*", inner):
+                if re.search(r"(?<!:):[A-Za-z_0-9]+?", inner):
                     raise SQLRejected(
                         "Bind markers inside quoted SQL text are disabled"
                     )
