@@ -25,7 +25,10 @@ ANALYZING_WORKER
      |
      +---- validation/object/read-only failure ----> BLOCKED
      |
-     +---- low risk and all auto gates pass -------> EXECUTING
+     +---- low risk and all auto gates pass -------> execute in claimed
+     |                                                ANALYZING_WORKER
+     |                                                     |
+     |                                                 SUCCEEDED
      |
      +---- human review required ------------------> PENDING_APPROVAL
                                                        |
