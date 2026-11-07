@@ -1,8 +1,8 @@
 datasources:
-  db_a:
-    name: Orders database
+  mysql8:
+    name: MySQL 8
     dialect: mysql
-    url_env: DB_A_URL
+    url_env: MYSQL8_URL
     allowed_agents: [local-agent]
     readonly_mode: mysql_transaction
     allowed_tables: [sales.orders, sales.order_items]
@@ -13,11 +13,10 @@ datasources:
     max_result_rows: 200
     max_result_bytes: 1048576
     timeout_ms: 5000
-
-  db_b:
-    name: Customer database
+  pg16:
+    name: PostgreSQL 16
     dialect: postgres
-    url_env: DB_B_URL
+    url_env: PG16_URL
     allowed_agents: [local-agent]
     readonly_mode: postgres_transaction
     allowed_tables: [public.customers, public.user_profiles]
@@ -28,33 +27,17 @@ datasources:
     max_result_rows: 100
     max_result_bytes: 524288
     timeout_ms: 5000
-
-  db_c:
-    name: Finance database
+  oracle19c:
+    name: Oracle 19c
     dialect: oracle
-    url_env: DB_C_URL
+    url_env: ORACLE19C_URL
     allowed_agents: [local-agent]
-    readonly_mode: unsupported
+    readonly_mode: oracle_transaction
     allowed_tables: [FINANCE.INVOICES, FINANCE.PAYMENTS]
     sensitive_columns: [BANK_ACCOUNT, TAX_ID]
     auto_execute: false
     max_auto_scan_rows: 0
-    max_hard_scan_rows: 100000
+    max_hard_scan_rows: 0
     max_result_rows: 100
     max_result_bytes: 524288
     timeout_ms: 3000
-
-  db_d:
-    name: Application logs
-    dialect: mysql
-    url_env: DB_D_URL
-    allowed_agents: [local-agent]
-    readonly_mode: mysql_transaction
-    allowed_tables: [logs.application_logs, logs.audit_logs]
-    sensitive_columns: [authorization, access_token]
-    auto_execute: true
-    max_auto_scan_rows: 50000
-    max_hard_scan_rows: 2000000
-    max_result_rows: 500
-    max_result_bytes: 1048576
-    timeout_ms: 5000
