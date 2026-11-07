@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -56,6 +58,8 @@ class InMemoryCredentialManager:
         self._expiring_window = expiring_window
         self._validator = validator
         self._records: dict[str, _Credential] = {}
+        self._ui_password_salt: bytes | None = None
+        self._ui_password_hash: bytes | None = None
         self._lock = threading.RLock()
 
     @staticmethod
@@ -240,6 +244,34 @@ class InMemoryCredentialManager:
                     changed.append(self._status_locked(datasource_id, now))
         return changed
 
+    def set_ui_password(self, password: str) -> None:
+        if not isinstance(password, str) or len(password) < 14 or len(password) > 1024:
+            raise ValueError("Worker UI password must be between 14 and 1024 characters")
+        salt = os.urandom(16)
+        digest = hashlib.scrypt(
+            password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
+        )
+        with self._lock:
+            self._ui_password_salt = salt
+            self._ui_password_hash = digest
+
+    def verify_ui_password(self, password: str) -> bool:
+        if not isinstance(password, str) or len(password) > 1024:
+            return False
+        with self._lock:
+            salt = self._ui_password_salt
+            expected = self._ui_password_hash
+        if salt is None or expected is None:
+            return False
+        candidate = hashlib.scrypt(
+            password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
+        )
+        return hmac.compare_digest(candidate, expected)
+
+    def ui_password_configured(self) -> bool:
+        with self._lock:
+            return self._ui_password_hash is not None
+
 
 def validate_database_credential(datasource: DataSource, database_url: str) -> bool:
     """Verify a candidate DSN before it can replace the active local credential."""
@@ -381,6 +413,12 @@ class CredentialSocketServer:
                         if datasource_id else self.manager.list_status()
                     ),
                 }
+            elif operation == "ui_password":
+                self.manager.set_ui_password(request.get("password"))
+                logger.info(
+                    "worker_ui.password_configured actor_uid=%s", peer_uid
+                )
+                response = {"ok": True}
             elif operation == "clear":
                 status = self.manager.clear_credential(request.get("datasource_id"))
                 logger.warning(
@@ -477,11 +515,22 @@ def main(argv: list[str] | None = None) -> int:
     status_cmd.add_argument("datasource_id", nargs="?")
     clear_cmd = commands.add_parser("clear", help="Remove a local credential")
     clear_cmd.add_argument("datasource_id")
+    ui_password_cmd = commands.add_parser(
+        "ui-password", help="Set the local Worker dashboard password"
+    )
+    ui_password_cmd.add_argument("action", choices=["set"])
     args = parser.parse_args(argv)
 
     client = CredentialSocketClient(args.socket)
     try:
-        if args.command == "set":
+        if args.command == "ui-password":
+            password = getpass.getpass("Worker dashboard password (input hidden): ")
+            confirmation = getpass.getpass("Confirm dashboard password: ")
+            if password != confirmation:
+                raise ValueError("Passwords do not match")
+            client.request({"operation": "ui_password", "password": password})
+            print("Worker dashboard password configured.")
+        elif args.command == "set":
             if args.expires_at and args.ttl_minutes is not None:
                 raise ValueError("Use either --expires-at or --ttl-minutes")
             expiry = _parse_expiry(args)
