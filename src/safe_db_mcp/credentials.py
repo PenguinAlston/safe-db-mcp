@@ -60,6 +60,7 @@ class InMemoryCredentialManager:
         self._records: dict[str, _Credential] = {}
         self._ui_password_salt: bytes | None = None
         self._ui_password_hash: bytes | None = None
+        self._ui_password_generation = 0
         self._lock = threading.RLock()
 
     @staticmethod
@@ -254,6 +255,11 @@ class InMemoryCredentialManager:
         with self._lock:
             self._ui_password_salt = salt
             self._ui_password_hash = digest
+            self._ui_password_generation += 1
+
+    def ui_password_generation(self) -> int:
+        with self._lock:
+            return self._ui_password_generation
 
     def verify_ui_password(self, password: str) -> bool:
         if not isinstance(password, str) or len(password) > 1024:
