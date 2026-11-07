@@ -128,8 +128,9 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
     if forbidden:
         raise SQLRejected(f"Forbidden SQL construct: {forbidden[0]}")
 
-    top_select = tree if isinstance(tree, exp.Select) else next(tree.find_all(exp.Select), None)
-    limit_node = top_select.args.get("limit") if top_select is not None else None
+    # A branch-local LIMIT does not bound a UNION/INTERSECT/EXCEPT result.
+    # Only a LIMIT attached to the root expression is a global result cap.
+    limit_node = tree.args.get("limit")
     has_limit = limit_node is not None
     limit_value = None
     if limit_node is not None:
