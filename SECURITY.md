@@ -6,9 +6,9 @@
 
 每条用户查询都必须在一个全新的、干净的数据库事务中执行，并且必须在第一条用户语句执行前启用数据库原生只读模式。
 
-- **MySQL 8：** 执行 \`START TRANSACTION READ ONLY\`，随后验证 \`@@transaction_read_only = 1\`。MySQL 只读事务仍允许对 TEMPORARY 表执行 DML。SQL 策略必须拒绝临时对象，数据库账号不得拥有 \`CREATE TEMPORARY TABLES\` 权限。
-- **PostgreSQL 16：** 执行 \`SET TRANSACTION READ ONLY\`，随后验证 \`SHOW transaction_read_only\` 返回 on。获取结果后回滚事务。
-- **Oracle 19c：** \`SET TRANSACTION READ ONLY\` 必须是该事务中的第一条语句。Oracle 没有直接等价的 \`transaction_read_only\` 状态变量。成功激活只读事务后执行一条无副作用的 SELECT，可作为运行时能力检查；每个执行连接都必须重新激活该模式。这并不等同于账号级只读授权。
+- **MySQL 8：** 执行 `START TRANSACTION READ ONLY`，随后验证 `@@transaction_read_only = 1`。MySQL 只读事务仍允许对 TEMPORARY 表执行 DML。SQL 策略必须拒绝临时对象，数据库账号不得拥有 `CREATE TEMPORARY TABLES` 权限。
+- **PostgreSQL 16：** 执行 `SET TRANSACTION READ ONLY`，随后验证 `SHOW transaction_read_only` 返回 on。获取结果后回滚事务。
+- **Oracle 19c：** `SET TRANSACTION READ ONLY` 必须是该事务中的第一条语句。Oracle 没有直接等价的 `transaction_read_only` 状态变量。成功激活只读事务后执行一条无副作用的 SELECT，可作为运行时能力检查；每个执行连接都必须重新激活该模式。这并不等同于账号级只读授权。
 
 原生只读事务不能替代最小权限数据库用户、SQL AST 校验、函数白名单或网络隔离。不要允许用户通过 SELECT 调用用户自定义函数、存储过程、有副作用的扩展或任意外部调用。
 
@@ -18,7 +18,7 @@
 - Worker 只能访问其所需的数据源密钥。
 - 只有经过审核且已验证数据库原生只读事务的适配器才允许执行查询。
 - 即使经过人工审批，SQL 白名单和只读强制措施仍然必须执行。
-- 解析前拒绝 SQL 注释，包括 MySQL 可执行注释和提示（hint）载体。由于服务器 \`sql_mode\` 会改变词法语义，因此拒绝 MySQL 反斜杠转义形式和双引号形式。
+- 解析前拒绝 SQL 注释，包括 MySQL 可执行注释和提示（hint）载体。由于服务器 `sql_mode` 会改变词法语义，因此拒绝 MySQL 反斜杠转义形式和双引号形式。
 - 表引用和配置白名单必须使用简单、不带引号且带 Schema 的标识符；目录检查必须使用精确标识符匹配，不得使用大小写折叠后的首次匹配。
 - 每次 Worker 任务认领都必须生成唯一 fencing token。所有 Worker 状态/结果写入都必须匹配当前 token 和预期状态；旧 Worker 不得完成已经被重新认领的任务。
 - 任务认领、租约恢复、提案创建、Worker 状态转换和审核员决策，都必须在状态变更所在的同一事务中写入对应审计事件。
@@ -34,12 +34,12 @@
 2. SQLite 不适合多副本 Worker。应将提案和审计数据迁移到 PostgreSQL，并保留原子认领/锁定语义。
 3. SQL 表白名单还会通过数据库目录进行检查：仅接受带 Schema 的基表。视图、物化视图、外部表和 Oracle 同义词均会被拒绝。列级策略、行/租户过滤条件以及结果脱敏仍未完成。
 4. 增加提案/结果存储加密、由 KMS 管理的密钥、保留/删除策略，以及不可篡改的外部审计存储。
-5. Oracle 无法获得行扫描成本估算；为避免写入 \`PLAN_TABLE\`，系统有意跳过查询规划，因此 Oracle 自动执行仍保持禁用。
+5. Oracle 无法获得行扫描成本估算；为避免写入 `PLAN_TABLE`，系统有意跳过查询规划，因此 Oracle 自动执行仍保持禁用。
 6. SQLGlot 已固定版本，并通过解析器差异回归测试拒绝注释载体、带引号的名称冲突，以及嵌入带引号文本中的 SQLAlchemy 绑定参数标记。仍需持续开展模糊测试和解析器差异测试、拒绝服务测试、数据库集成测试，以及容器/网络渗透测试。
 7. 增加速率限制、按主体配额、有界队列深度和主动查询取消。Worker 任务认领使用 fencing token 和可配置的过期租约恢复；租约配置必须长于最大分析/执行时长。
 8. 增加结果脱敏，防止敏感数据进入模型上下文。
 9. MySQL 只读事务有特定于引擎的语义，包括临时表行为；必须移除数据库账号创建临时表的权限。
-10. Worker 使用 SQLAlchemy 连接池；生产环境必须针对选定驱动测试回滚/重置行为和会话变量卫生。分析查询目前已增加驱动层、连接池层和数据库端超时。Oracle 的 \`call_timeout\` 按单次往返生效；适配器还会在 execute/fetch 周围实施单调时钟墙钟预算，但仍必须进行真实 Oracle 集成测试。
+10. Worker 使用 SQLAlchemy 连接池；生产环境必须针对选定驱动测试回滚/重置行为和会话变量卫生。分析查询目前已增加驱动层、连接池层和数据库端超时。Oracle 的 `call_timeout` 按单次往返生效；适配器还会在 execute/fetch 周围实施单调时钟墙钟预算，但仍必须进行真实 Oracle 集成测试。
 11. 流式结果获取降低了批量缓冲需求，但在字节数限制生效前，驱动仍可能先将一个超大行/LOB 完整加载到内存。
 
 ## 事件响应
