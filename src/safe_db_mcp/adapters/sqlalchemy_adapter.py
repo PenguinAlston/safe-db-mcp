@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 import time
+from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Iterator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -69,58 +71,111 @@ def _walk_mysql(value: Any) -> int | None:
 
 
 class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
-    """Per-query native read-only transaction enforcement."""
+    """Per-query native read-only transaction enforcement with bounded DB round-trips."""
 
-    def __init__(self, dialect: str, database_url: str):
+    def __init__(self, dialect: str, database_url: str, timeout_ms: int = 5000):
+        if timeout_ms <= 0:
+            raise ValueError("timeout_ms must be greater than zero")
         self.dialect = dialect
+        self.timeout_ms = int(timeout_ms)
+        connect_timeout = max(1, math.ceil(self.timeout_ms / 1000))
+        connect_args: dict[str, Any] = {}
+        if dialect == "postgres":
+            connect_args = {
+                "connect_timeout": connect_timeout,
+                "options": f"-c statement_timeout={self.timeout_ms}",
+            }
+        elif dialect == "mysql":
+            connect_args = {
+                "connect_timeout": connect_timeout,
+                "read_timeout": connect_timeout,
+                "write_timeout": connect_timeout,
+            }
+        elif dialect == "oracle":
+            connect_args = {"tcp_connect_timeout": max(1, self.timeout_ms / 1000)}
+
         self.engine: Engine = create_engine(
             database_url,
-            # Oracle must issue SET TRANSACTION READ ONLY before any statement
+            # Oracle must issue SET TRANSACTION READ ONLY before any SQL statement
             # in its transaction. Disable checkout ping for that dialect.
             pool_pre_ping=(dialect != "oracle"),
             pool_size=2,
             max_overflow=0,
+            pool_timeout=max(0.1, self.timeout_ms / 1000),
+            connect_args=connect_args,
             hide_parameters=True,
         )
 
-    def verify_readonly(self) -> bool:
-        """Check native read-only transaction activation on a fresh connection.
+    def _begin_analysis_readonly(self, conn) -> None:
+        """Start a read-only metadata/planning transaction with DB-side timeouts."""
+        if self.dialect == "postgres":
+            conn.exec_driver_sql("SET TRANSACTION READ ONLY")
+            conn.exec_driver_sql(
+                f"SET LOCAL statement_timeout = '{self.timeout_ms}ms'"
+            )
+            return
+        if self.dialect == "mysql":
+            conn.exec_driver_sql(
+                f"SET SESSION max_execution_time = {self.timeout_ms}"
+            )
+            conn.exec_driver_sql("START TRANSACTION READ ONLY")
+            return
+        if self.dialect == "oracle":
+            # call_timeout is a driver property, not a SQL statement. Set it before
+            # the first transaction statement, as Oracle requires.
+            conn.connection.driver_connection.call_timeout = self.timeout_ms
+            conn.exec_driver_sql("SET TRANSACTION READ ONLY")
+            return
+        raise RuntimeError(f"Unsupported analysis dialect: {self.dialect}")
 
-        Oracle has no transaction_read_only status variable. For Oracle, successful
-        SET TRANSACTION READ ONLY followed by a harmless SELECT is the capability
-        check; the same native command is repeated before every user query.
-        """
+    def _reset_connection_controls(self, conn) -> None:
         try:
-            with self.engine.connect() as conn:
+            conn.rollback()
+            if self.dialect == "mysql":
+                # This is a session variable and must not leak through the pool.
+                conn.exec_driver_sql("SET SESSION max_execution_time = 0")
+                conn.rollback()
+            elif self.dialect == "oracle":
+                conn.connection.driver_connection.call_timeout = 0
+        except Exception:
+            conn.invalidate()
+
+    @contextmanager
+    def _analysis_connection(self) -> Iterator[Any]:
+        with self.engine.connect() as conn:
+            try:
+                self._begin_analysis_readonly(conn)
+                yield conn
+            finally:
+                self._reset_connection_controls(conn)
+
+    def verify_readonly(self) -> bool:
+        """Verify database-native read-only mode on a fresh, bounded connection."""
+        try:
+            with self._analysis_connection() as conn:
                 if self.dialect == "postgres":
-                    conn.exec_driver_sql("SET TRANSACTION READ ONLY")
                     value = conn.exec_driver_sql(
                         "SHOW transaction_read_only"
                     ).scalar()
-                    conn.rollback()
                     return str(value).lower() in {"on", "true", "1"}
                 if self.dialect == "mysql":
-                    conn.exec_driver_sql("START TRANSACTION READ ONLY")
                     value = conn.exec_driver_sql(
                         "SELECT @@transaction_read_only"
                     ).scalar()
-                    conn.rollback()
                     return int(value) == 1
                 if self.dialect == "oracle":
-                    conn.exec_driver_sql("SET TRANSACTION READ ONLY")
                     conn.exec_driver_sql("SELECT 1 FROM DUAL").scalar()
-                    conn.rollback()
                     return True
-        except (SQLAlchemyError, TypeError, ValueError):
+        except (SQLAlchemyError, TypeError, ValueError, TimeoutError):
             return False
         return False
 
     def verify_allowed_tables(self, tables: tuple[str, ...]) -> bool:
-        """Allow only schema-qualified base tables, never views or synonyms."""
+        """Allow only exact schema-qualified base tables, never views or synonyms."""
         if not tables:
             return False
         try:
-            with self.engine.connect() as conn:
+            with self._analysis_connection() as conn:
                 for key in tables:
                     parts = key.split(".")
                     if len(parts) != 2 or not all(parts):
@@ -128,34 +183,44 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                     schema, table = parts
                     if self.dialect == "mysql":
                         row = conn.execute(
-                            text("SELECT TABLE_TYPE FROM information_schema.TABLES "
-                                 "WHERE LOWER(TABLE_SCHEMA)=:schema AND LOWER(TABLE_NAME)=:table"),
+                            text(
+                                "SELECT TABLE_TYPE FROM information_schema.TABLES "
+                                "WHERE TABLE_SCHEMA=:schema AND TABLE_NAME=:table"
+                            ),
                             {"schema": schema, "table": table},
                         ).scalar()
                         if row != "BASE TABLE":
                             return False
                     elif self.dialect == "postgres":
                         row = conn.execute(
-                            text("SELECT c.relkind FROM pg_class c "
-                                 "JOIN pg_namespace n ON n.oid=c.relnamespace "
-                                 "WHERE LOWER(n.nspname)=:schema AND LOWER(c.relname)=:table"),
+                            text(
+                                "SELECT c.relkind FROM pg_class c "
+                                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                                "WHERE n.nspname=:schema AND c.relname=:table"
+                            ),
                             {"schema": schema, "table": table},
                         ).scalar()
                         if row not in {"r", "p"}:
                             return False
                     elif self.dialect == "oracle":
                         row = conn.execute(
-                            text("SELECT OBJECT_TYPE FROM ALL_OBJECTS "
-                                 "WHERE LOWER(OWNER)=:schema AND LOWER(OBJECT_NAME)=:table "
-                                 "AND OBJECT_TYPE='TABLE'"),
-                            {"schema": schema, "table": table},
+                            text(
+                                "SELECT OBJECT_TYPE FROM ALL_OBJECTS "
+                                "WHERE OWNER=:schema AND OBJECT_NAME=:table "
+                                "AND OBJECT_TYPE='TABLE' "
+                                "AND NOT EXISTS ("
+                                "SELECT 1 FROM ALL_EXTERNAL_TABLES e "
+                                "WHERE e.OWNER=ALL_OBJECTS.OWNER "
+                                "AND e.TABLE_NAME=ALL_OBJECTS.OBJECT_NAME)"
+                            ),
+                            {"schema": schema.upper(), "table": table.upper()},
                         ).scalar()
                         if row != "TABLE":
                             return False
                     else:
                         return False
             return True
-        except SQLAlchemyError:
+        except (SQLAlchemyError, TimeoutError):
             return False
 
     def explain(self, sql: str, parameters: dict[str, Any]) -> QueryPlan:
@@ -171,7 +236,7 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                 },
             )
 
-        with self.engine.connect() as conn:
+        with self._analysis_connection() as conn:
             if self.dialect == "postgres":
                 raw = conn.execute(
                     text("EXPLAIN (FORMAT JSON) " + sql), parameters
@@ -193,6 +258,8 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
         raise RuntimeError("EXPLAIN is unsupported for this dialect")
 
     def _begin_native_readonly(self, conn, timeout_ms: int) -> None:
+        if timeout_ms <= 0:
+            raise ValueError("timeout_ms must be greater than zero")
         if self.dialect == "postgres":
             conn.exec_driver_sql("SET TRANSACTION READ ONLY")
             mode = conn.exec_driver_sql(
@@ -220,10 +287,9 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
             return
 
         if self.dialect == "oracle":
-            # This must be the first statement in the Oracle transaction.
-            conn.exec_driver_sql("SET TRANSACTION READ ONLY")
-            # python-oracledb call_timeout is per round-trip and measured in ms.
+            # Set a driver-level bound before the first transaction statement.
             conn.connection.driver_connection.call_timeout = int(timeout_ms)
+            conn.exec_driver_sql("SET TRANSACTION READ ONLY")
             return
 
         raise RuntimeError(f"Unsupported read-only dialect: {self.dialect}")
@@ -236,11 +302,14 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
         max_bytes: int,
         timeout_ms: int,
     ) -> dict[str, Any]:
+        if timeout_ms <= 0 or max_rows <= 0 or max_bytes <= 0:
+            raise ValueError("timeout_ms, max_rows and max_bytes must be positive")
         started = time.monotonic()
         deadline = started + timeout_ms / 1000
         rows_out = []
         byte_count = 0
         truncated = False
+        failed = False
 
         with self.engine.connect() as conn:
             try:
@@ -250,8 +319,15 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                     driver.call_timeout = min(
                         timeout_ms, max(1, int((deadline - time.monotonic()) * 1000))
                     )
-                result = conn.execution_options(stream_results=True).execute(text(sql), parameters)
+                result = conn.execution_options(stream_results=True).execute(
+                    text(sql), parameters
+                )
                 columns = list(result.keys())
+                if len(columns) != len(set(columns)):
+                    raise RuntimeError(
+                        "Duplicate result column names are not supported"
+                    )
+
                 while len(rows_out) < max_rows + 1:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
@@ -262,7 +338,7 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                         conn.connection.driver_connection.call_timeout = min(
                             timeout_ms, max(1, int(remaining * 1000))
                         )
-                    # Stream one row at a time to reduce pre-budget buffering.
+                    # One-row streaming reduces batch buffering before the byte cap.
                     batch = result.fetchmany(1)
                     if not batch:
                         break
@@ -284,22 +360,17 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                         byte_count += len(encoded)
                     if truncated:
                         break
+            except BaseException:
+                failed = True
+                raise
             finally:
-                try:
-                    conn.rollback()
-                finally:
-                    if self.dialect == "mysql":
-                        try:
-                            conn.exec_driver_sql(
-                                "SET SESSION max_execution_time = 0"
-                            )
-                        except SQLAlchemyError:
-                            conn.invalidate()
-                    elif self.dialect == "oracle":
-                        try:
-                            conn.connection.driver_connection.call_timeout = 0
-                        except Exception:
-                            conn.invalidate()
+                if self.dialect == "mysql" and (failed or truncated):
+                    # PyMySQL's unbuffered cursor close can drain all remaining rows.
+                    # Destroy the DBAPI connection instead of returning a live stream
+                    # to the pool or performing a potentially unbounded drain.
+                    conn.invalidate()
+                else:
+                    self._reset_connection_controls(conn)
 
         return {
             "rows": rows_out,
