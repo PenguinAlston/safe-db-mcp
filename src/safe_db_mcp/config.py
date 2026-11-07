@@ -123,6 +123,14 @@ def load_datasources(path: str | None = None) -> dict[str, DataSource]:
         if dialect not in {"mysql", "postgres", "oracle"}:
             raise ValueError(f"{datasource_id}: unsupported dialect: {dialect}")
 
+        sensitive = frozenset(
+            normalise_identifier(str(x)) for x in item.get("sensitive_columns", [])
+        )
+        if any("." in key for key in sensitive):
+            raise ValueError(
+                f"{datasource_id}: sensitive_columns must use unqualified column names"
+            )
+
         result[datasource_id] = DataSource(
             datasource_id=datasource_id,
             name=str(item.get("name", datasource_id)),
@@ -130,9 +138,7 @@ def load_datasources(path: str | None = None) -> dict[str, DataSource]:
             url_env=str(item["url_env"]),
             readonly_mode=str(item.get("readonly_mode", "unsupported")),
             allowed_tables=allowed,
-            sensitive_columns=frozenset(
-                normalise_identifier(str(x)) for x in item.get("sensitive_columns", [])
-            ),
+            sensitive_columns=sensitive,
             auto_execute=auto_execute,
             max_auto_scan_rows=_nonnegative_int(item, "max_auto_scan_rows", 0),
             max_hard_scan_rows=_nonnegative_int(item, "max_hard_scan_rows", 0),
