@@ -1,0 +1,43 @@
+datasources:
+  mysql8:
+    name: MySQL 8
+    dialect: mysql
+    url_env: MYSQL8_URL
+    allowed_agents: [local-agent]
+    readonly_mode: mysql_transaction
+    allowed_tables: [sales.orders, sales.order_items]
+    sensitive_columns: [customer_phone, payment_token]
+    auto_execute: true
+    max_auto_scan_rows: 10000
+    max_hard_scan_rows: 1000000
+    max_result_rows: 200
+    max_result_bytes: 1048576
+    timeout_ms: 5000
+  pg16:
+    name: PostgreSQL 16
+    dialect: postgres
+    url_env: PG16_URL
+    allowed_agents: [local-agent]
+    readonly_mode: postgres_transaction
+    allowed_tables: [public.customers, public.user_profiles]
+    sensitive_columns: [email, phone, password_hash]
+    auto_execute: true
+    max_auto_scan_rows: 5000
+    max_hard_scan_rows: 500000
+    max_result_rows: 100
+    max_result_bytes: 524288
+    timeout_ms: 5000
+  oracle19c:
+    name: Oracle 19c
+    dialect: oracle
+    url_env: ORACLE19C_URL
+    allowed_agents: [local-agent]
+    readonly_mode: oracle_transaction
+    allowed_tables: [FINANCE.INVOICES, FINANCE.PAYMENTS]
+    sensitive_columns: [BANK_ACCOUNT, TAX_ID]
+    auto_execute: false
+    max_auto_scan_rows: 0
+    max_hard_scan_rows: 0
+    max_result_rows: 100
+    max_result_bytes: 524288
+    timeout_ms: 3000

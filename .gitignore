@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+config/datasources.yaml
+data/
+*.sqlite3
+*.db
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+dist/
+build/
+*.egg-info/
