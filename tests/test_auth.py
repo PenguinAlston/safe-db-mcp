@@ -23,3 +23,30 @@ def test_non_ascii_bearer_token_is_a_normal_401(auth_fn, env_name, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         auth_fn(make_request("Bearer café"))
     assert exc.value.status_code == 401
+
+
+@pytest.mark.parametrize("shared_field", ["token", "identity"])
+def test_reviewer_rejects_shared_agent_credentials(monkeypatch, shared_field):
+    monkeypatch.setenv("SAFEDB_AGENT_TOKEN", "test-agent-token")
+    monkeypatch.setenv("SAFEDB_REVIEWER_TOKEN", "test-reviewer-token")
+    monkeypatch.setenv("SAFEDB_AGENT_ID", "test-agent")
+    monkeypatch.setenv("SAFEDB_REVIEWER_ID", "test-reviewer")
+    token = "test-reviewer-token"
+    if shared_field == "token":
+        token = "test-agent-token"
+        monkeypatch.setenv("SAFEDB_REVIEWER_TOKEN", token)
+    else:
+        monkeypatch.setenv("SAFEDB_REVIEWER_ID", "test-agent")
+    with pytest.raises(HTTPException) as error:
+        require_reviewer(make_request(f"Bearer {token}"))
+    assert error.value.status_code == 503
+
+
+def test_independent_reviewer_credentials_are_accepted(monkeypatch):
+    monkeypatch.setenv("SAFEDB_AGENT_TOKEN", "test-agent-token")
+    monkeypatch.setenv("SAFEDB_REVIEWER_TOKEN", "test-reviewer-token")
+    monkeypatch.setenv("SAFEDB_AGENT_ID", "test-agent")
+    monkeypatch.setenv("SAFEDB_REVIEWER_ID", "test-reviewer")
+    assert require_reviewer(make_request("Bearer test-reviewer-token")).actor_id == (
+        "test-reviewer"
+    )

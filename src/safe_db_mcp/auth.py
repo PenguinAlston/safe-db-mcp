@@ -36,6 +36,12 @@ def require_reviewer(request: Request) -> Principal:
     expected = os.getenv("SAFEDB_REVIEWER_TOKEN", "")
     if not expected or not _token_matches(_bearer(request), expected):
         raise HTTPException(status_code=401, detail="Invalid reviewer token")
+    if (
+        _token_matches(expected, os.getenv("SAFEDB_AGENT_TOKEN", ""))
+        or os.getenv("SAFEDB_REVIEWER_ID", "reviewer-dev")
+        == os.getenv("SAFEDB_AGENT_ID", "agent-dev")
+    ):
+        raise HTTPException(status_code=503, detail="Reviewer credentials must be independent")
     return Principal(
         actor_id=os.getenv("SAFEDB_REVIEWER_ID", "reviewer-dev"),
         role="reviewer",
