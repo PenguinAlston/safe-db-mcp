@@ -39,6 +39,8 @@ def test_select_from_allowed_table(datasource):
     "UPDATE public.orders SET id = 1",
     "INSERT INTO public.orders(id) VALUES (1)",
     "DROP TABLE public.orders",
+    "CREATE TEMPORARY TABLE t AS SELECT id FROM public.orders",
+    "CREATE TEMP TABLE t AS SELECT id FROM public.orders",
     "SELECT id INTO new_table FROM public.orders",
     "SELECT id FROM public.orders FOR UPDATE",
     "SELECT * FROM public.orders",
