@@ -3,12 +3,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-import os
 import secrets
 import threading
 import time
 from collections import deque
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
