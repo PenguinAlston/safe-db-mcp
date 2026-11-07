@@ -20,7 +20,9 @@ These are transaction-level protections, not substitutes for database users with
 - A separate worker resolves credentials, verifies native read-only support, estimates query cost where safe, and calculates risk.
 - LOW risk auto-executes only if every gate passes. MEDIUM/HIGH requires a separate human reviewer.
 - Approval binds to the SQL + parameter hash, requester and expiry. The worker reparses, rechecks native read-only mode and replans before execution.
-- Results are bounded by row count and response bytes. Exact scanned rows are reported only when an adapter has a true runtime metric.
+- Results are streamed one row at a time and bounded by row count and response bytes (a single oversized database value may still be materialized by the driver). Exact scanned rows are reported only when an adapter has a true runtime metric.
+- Before planning and again before execution, the worker resolves every allowlisted object against database catalogs and accepts only base tables; views, materialized views, foreign tables and Oracle synonyms fail closed.
+- Oracle applies a monotonic end-to-end time budget around execution and fetches, in addition to per-round-trip `call_timeout`.
 - Agent never receives DB URLs, usernames, passwords or secret references. MCP has no direct database connection.
 
 ## Quick start (local development only)
@@ -48,7 +50,7 @@ The Docker Compose file intentionally does not inject database URL variables int
 - Current policy is table-level. Add column-level authorization, tenant/row filters, view dependency resolution and output redaction.
 - Validate native read-only enforcement against exact server and driver versions using integration tests and a dedicated test schema. Unit tests do not prove server-side enforcement.
 - Oracle scan estimates are not available in this version; manual approval is mandatory and Oracle auto-execution is disabled.
-- Add rate limits, quotas, queue limits, cancellation, worker lease recovery, immutable external audit sink, monitoring and penetration tests.
+- Add rate limits, quotas, queue limits, active query cancellation, immutable external audit sink, monitoring and penetration tests. Worker claims now have a configurable stale-lease recovery timeout; set it comfortably above the maximum query/analysis duration.
 - EXPLAIN values are estimates. Exact runtime scanned rows remain unavailable for these adapters.
 - Human approval never overrides the hard SQL allowlist or native read-only enforcement.
 
