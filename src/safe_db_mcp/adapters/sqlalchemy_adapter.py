@@ -115,6 +115,18 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
         return False
 
     def explain(self, sql: str, parameters: dict[str, Any]) -> QueryPlan:
+        if self.dialect == "oracle":
+            # Oracle EXPLAIN PLAN writes PLAN_TABLE. Avoid hidden writes here;
+            # unknown estimates force approval and keep auto-execution disabled.
+            return QueryPlan(
+                None,
+                None,
+                {
+                    "planner": "oracle_not_run",
+                    "reason": "EXPLAIN PLAN writes PLAN_TABLE",
+                },
+            )
+
         with self.engine.connect() as conn:
             if self.dialect == "postgres":
                 raw = conn.execute(
@@ -133,17 +145,6 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                 payload = json.loads(raw) if isinstance(raw, str) else raw
                 return QueryPlan(
                     _walk_mysql(payload), None, {"planner": "mysql_explain_json"}
-                )
-            if self.dialect == "oracle":
-                # Oracle EXPLAIN PLAN writes PLAN_TABLE. Avoid hidden writes here;
-                # unknown estimates force approval and keep auto-execution disabled.
-                return QueryPlan(
-                    None,
-                    None,
-                    {
-                        "planner": "oracle_not_run",
-                        "reason": "EXPLAIN PLAN writes PLAN_TABLE",
-                    },
                 )
         raise RuntimeError("EXPLAIN is unsupported for this dialect")
 
