@@ -105,14 +105,14 @@ C1 中 SQL、参数和受限查询结果默认仍可能经过云端。部署前�
 
 ## Worker 本地临时凭证管理（已实现的第一阶段能力）
 
-对于 `credential_source.type: local_manual` 的数据源，Worker 提供仅本机 Unix Socket 管理接口。凭证仅驻留 Worker 进程内存，不写入 SQLite、YAML、普通文件或云端。Worker 重启后状态回到 `MISSING)，必须重新由管理员录入。
+对于 `credential_source.type: local_manual` 的数据源，Worker 提供仅本机 Unix Socket 管理接口。凭证仅驻留 Worker 进程内存，不写入 SQLite、YAML、普通文件或云端。Worker 重启后状态回到 `MISSING`，必须重新由管理员录入。
 
 ```bash
 # 查看所有数据源凭证状态（不输出 URL/密码）
 docker compose exec worker python -m safe_db_mcp.credentials status
 
 # 隐藏输入并确认；默认有效期 420 分钟，预留 60 分钟安全余量
-docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 450
+docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 420
 
 # 指定堡垒机精确到期时间，必须带时区
 docker compose exec worker python -m safe_db_mcp.credentials set pg16 --expires-at 2026-11-08T02:00:00+08:00
@@ -131,6 +131,6 @@ Worker 对本地凭证实施以下状态管理：
 - `NEEDS_CREDENTIAL`：已过期或被清除；Worker 清除内存中的 DSN 并暂停该数据源新任务。
 - `INVALID`：保留给未来的验证状态；当前版本不把具体数据库连接错误转换为可见秘密或自动重试。
 
-录入时优先输入堡垒机明确显示的到期时间。若无法确认精确时间，使用保守 TTL；默认示例 450 分钟，而不是用满 480 分钟。新 DSN 先做语法和方言检查，后续首次数据库连接会验证实际可用性。Worker 每个提案独立创建适配器/连接池，因此替换凭证只影响后续新任务；正在执行的任务不会被自动迁移，若堡垒机撤销旧连接，查询会按正常执行错误处理。
+录入时优先输入堡垒机明确显示的到期时间。若无法确认精确时间，使用保守 TTL；默认示例 420 分钟，而不是用满 480 分钟。新 DSN 先做语法和方言检查，后续首次数据库连接会验证实际可用性。Worker 每个提案独立创建适配器/连接池，因此替换凭证只影响后续新任务；正在执行的任务不会被自动迁移，若堡垒机撤销旧连接，查询会按正常执行错误处理。
 
 本阶段尚未实现桌面通知、邮件或云端告警推送。当前到期提醒体现为凭证状态和 Worker 日志告警，生产部署应将日志接入客户现有告警系统。
