@@ -184,7 +184,11 @@ class QueryService:
             return
 
         from safe_db_mcp.adapters.factory import create_adapter
-        adapter = create_adapter(datasource)
+        adapter = (
+            create_adapter(datasource)
+            if self.credential_provider is None
+            else create_adapter(datasource, self.credential_provider)
+        )
         try:
             if not adapter.verify_readonly():
                 self._block(proposal, "READONLY_NOT_VERIFIED")
