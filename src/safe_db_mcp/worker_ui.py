@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -185,7 +186,9 @@ def create_worker_ui_app(manager: InMemoryCredentialManager) -> FastAPI:
             raise HTTPException(status_code=400, detail="Datasource credential request is invalid")
         try:
             expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-            status_value = manager.set_credential(datasource_id, database_url, expiry)
+            status_value = await run_in_threadpool(
+                manager.set_credential, datasource_id, database_url, expiry
+            )
         except Exception:
             # Never echo exception text or request data; they may contain a DSN.
             logger.warning("worker_ui.credential_rejected datasource=%s", datasource_id)
