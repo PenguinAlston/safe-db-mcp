@@ -1,23 +1,23 @@
-## Summary
+## 变更摘要
 
-Describe the change and the trust boundary it affects.
+说明本次变更内容，以及它影响了哪个信任边界。
 
-## Security impact
+## 安全影响
 
-- Threat or failure mode addressed:
-- Does this change alter accepted SQL syntax, authorization, approval, transaction state, or result handling?
-- New residual risks:
+- 解决的威胁或故障模式：
+- 本次变更是否会改变可接受的 SQL 语法、授权、审批、事务状态或结果处理？
+- 新增的剩余风险：
 
-## Validation
+## 验证情况
 
-- [ ] `ruff check src tests`
-- [ ] `pytest -q`
-- [ ] Security regression tests added/updated
-- [ ] Live database integration tests run (list engine/server and driver versions), or explicitly state they were not run
-- [ ] Documentation updated (`README.md`, `SECURITY.md`, `AGENTS.md`, relevant docs)
+- [ ] \`ruff check src tests\`
+- [ ] \`pytest -q\`
+- [ ] 已新增/更新安全回归测试
+- [ ] 已运行真实数据库集成测试（列出数据库引擎/服务器及驱动版本）；或者明确说明未运行
+- [ ] 已更新文档（\`README.md\`、\`SECURITY.md\`、\`AGENTS.md\` 及相关文档）
 
-## Secret/data hygiene
+## 密钥与数据卫生
 
-- [ ] No credentials, DB URLs, production SQL, customer data, or sensitive result sets are included
-- [ ] API and MCP processes still have no database credentials
-- [ ] Worker fencing-token and audit atomicity guarantees are preserved
+- [ ] 未包含凭证、数据库 URL、生产 SQL、客户数据或敏感查询结果
+- [ ] API 和 MCP 进程仍然不持有数据库凭证
+- [ ] Worker fencing token 和审计原子性保证均得到保留
