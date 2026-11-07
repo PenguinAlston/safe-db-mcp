@@ -73,3 +73,82 @@ def test_union_branch_limit_does_not_count_as_global_limit(datasource):
     )
     assert result.has_top_level_limit is False
     assert result.limit_value is None
+
+
+def mysql_datasource():
+    return DataSource(
+        datasource_id="mysql",
+        name="mysql",
+        dialect="mysql",
+        url_env="MYSQL_URL",
+        readonly_mode="mysql_transaction",
+        allowed_tables=frozenset({"sales.orders"}),
+        sensitive_columns=frozenset({"payment_token"}),
+        auto_execute=True,
+        max_auto_scan_rows=1000,
+        max_hard_scan_rows=10000,
+        max_result_rows=100,
+        max_result_bytes=100000,
+        timeout_ms=1000,
+        allowed_agents=frozenset({"agent"}),
+    )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT id /*!50000 , payment_token */ FROM sales.orders LIMIT 5",
+        "SELECT id FROM sales.orders WHERE id=1--1 UNION SELECT password FROM mysql.user",
+        "SELECT id FROM sales.orders /* optimizer hint */ LIMIT 5",
+        "SELECT id FROM sales.orders # hidden comment",
+    ],
+)
+def test_mysql_comment_and_parser_differential_payloads_are_rejected(sql):
+    with pytest.raises(SQLRejected):
+        validate_sql(sql, mysql_datasource(), {})
+
+
+def test_mysql_backslash_and_double_quote_ambiguities_are_rejected():
+    with pytest.raises(SQLRejected):
+        validate_sql(
+            "SELECT id FROM sales.orders WHERE note='a\\\\' OR 1=1",
+            mysql_datasource(),
+            {},
+        )
+    with pytest.raises(SQLRejected):
+        validate_sql(
+            'SELECT "id" FROM sales.orders LIMIT 5',
+            mysql_datasource(),
+            {},
+        )
+
+
+def test_bind_marker_inside_string_literal_is_rejected(datasource):
+    with pytest.raises(SQLRejected, match="Bind markers inside quoted"):
+        validate_sql(
+            "SELECT ':payload' AS note, id FROM public.orders LIMIT 1",
+            datasource,
+            {"payload": "value"},
+        )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'SELECT id FROM "public"."orders" LIMIT 5',
+        'SELECT id FROM "public.orders" LIMIT 5',
+    ],
+)
+def test_quoted_or_ambiguous_table_identifiers_are_rejected(datasource, sql):
+    with pytest.raises(SQLRejected):
+        validate_sql(sql, datasource, {})
+
+
+def test_fetch_first_is_recognised_as_top_level_limit(datasource):
+    result = validate_sql(
+        "SELECT id FROM public.orders FETCH FIRST 5 ROWS ONLY",
+        datasource,
+        {},
+    )
+    assert result.has_top_level_limit is True
+    assert result.limit_value == 5
