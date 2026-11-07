@@ -30,6 +30,8 @@ class QueryService:
         datasource = self.datasources.get(datasource_id)
         if datasource is None:
             raise PermissionError("Datasource is not registered")
+        if requester_id not in datasource.allowed_agents:
+            raise PermissionError("Agent is not authorized for this datasource")
         query = validate_sql(sql, datasource, parameters)
         created = now()
         proposal = {
@@ -115,6 +117,9 @@ class QueryService:
             return
 
         datasource = self.datasources[proposal["datasource_id"]]
+        if proposal["requester_id"] not in datasource.allowed_agents:
+            self._block(proposal, "AGENT_DATASOURCE_PERMISSION_CHANGED")
+            return
         query = validate_sql(proposal["sql"], datasource, proposal["parameters"])
         if query.sql_hash != proposal["sql_hash"]:
             self._block(proposal, "QUERY_HASH_MISMATCH")
@@ -134,8 +139,9 @@ class QueryService:
             if new_level > old_level:
                 self.store.update(
                     proposal["proposal_id"],
-                    status="NEEDS_REAPPROVAL",
+                    status="PENDING_APPROVAL",
                     risk_json=assessment.model_dump(),
+                    approval_json=None,
                 )
                 self.store.audit(
                     proposal["proposal_id"], "query.risk_increased", "worker",
