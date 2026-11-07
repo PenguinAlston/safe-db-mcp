@@ -3,10 +3,9 @@ datasources:
     name: Orders database
     dialect: mysql
     url_env: DB_A_URL
+    allowed_agents: [local-agent]
     readonly_mode: mysql_transaction
-    allowed_tables:
-      - sales.orders
-      - sales.order_items
+    allowed_tables: [sales.orders, sales.order_items]
     sensitive_columns: [customer_phone, payment_token]
     auto_execute: true
     max_auto_scan_rows: 10000
@@ -19,6 +18,7 @@ datasources:
     name: Customer database
     dialect: postgres
     url_env: DB_B_URL
+    allowed_agents: [local-agent]
     readonly_mode: postgres_transaction
     allowed_tables: [public.customers, public.user_profiles]
     sensitive_columns: [email, phone, password_hash]
@@ -33,6 +33,7 @@ datasources:
     name: Finance database
     dialect: oracle
     url_env: DB_C_URL
+    allowed_agents: [local-agent]
     readonly_mode: unsupported
     allowed_tables: [FINANCE.INVOICES, FINANCE.PAYMENTS]
     sensitive_columns: [BANK_ACCOUNT, TAX_ID]
@@ -47,6 +48,7 @@ datasources:
     name: Application logs
     dialect: mysql
     url_env: DB_D_URL
+    allowed_agents: [local-agent]
     readonly_mode: mysql_transaction
     allowed_tables: [logs.application_logs, logs.audit_logs]
     sensitive_columns: [authorization, access_token]
