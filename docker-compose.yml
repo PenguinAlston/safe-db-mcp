@@ -19,11 +19,16 @@ services:
   worker:
     build: .
     command: python -m safe_db_mcp.worker
+    ports:
+      - "127.0.0.1:8090:8090"
     environment:
       SAFEDB_DB_PATH: /data/safedb.sqlite3
       SAFEDB_DATASOURCES_FILE: /app/config/datasources.yaml
       SAFEDB_WORKER_INTERVAL_SECONDS: 1
       SAFEDB_CREDENTIAL_SOCKET: /run/safedb/credentials.sock
+      SAFEDB_WORKER_UI_ENABLED: "true"
+      SAFEDB_WORKER_UI_HOST: 0.0.0.0
+      SAFEDB_WORKER_UI_PORT: 8090
     volumes:
       - ./data:/data
       - ./config:/app/config:ro
