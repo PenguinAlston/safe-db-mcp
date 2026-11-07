@@ -58,10 +58,12 @@ def assess_risk(
     if not query.has_top_level_limit:
         score += 15
         reasons.append("NO_TOP_LEVEL_LIMIT")
-
-    if query.columns & datasource.sensitive_columns:
-        score += 30
-        reasons.append("SENSITIVE_COLUMN_REFERENCE")
+    elif query.limit_value is None:
+        score += 15
+        reasons.append("NON_LITERAL_LIMIT")
+    elif query.limit_value > datasource.max_result_rows:
+        score += 15
+        reasons.append("LIMIT_EXCEEDS_RESULT_CAP")
 
     score = min(score, 100)
     level = "LOW" if score < 20 else "MEDIUM" if score < 50 else "HIGH"
@@ -72,8 +74,8 @@ def assess_risk(
         read_only_verified,
         rows is not None,
         rows <= datasource.max_auto_scan_rows,
-        plan.estimated_result_rows is not None,
-        query.has_top_level_limit,
+        query.limit_value is not None,
+        0 < query.limit_value <= datasource.max_result_rows,
         not (query.columns & datasource.sensitive_columns),
     ))
 
