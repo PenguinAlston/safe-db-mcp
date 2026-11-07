@@ -65,3 +65,13 @@ GitHub Actions 工作流会在 Python 3.12 上运行 lint 和单元测试命令�
 - 缺少凭证时 Worker 不应认领新任务；凭证检查和实际建连之间发生过期竞态时，必须使用 fencing token 将提案退回原队列状态。
 - 本地 Socket 必须位于 Worker 用户拥有的私有目录中，拒绝不匹配的目录权限、非 Socket 路径和不同 UID 的 Linux 客户端。
 - Worker 重启后凭证必须回到 `MISSING`，不得从 SQLite、普通文件或云端恢复明文秘密。
+
+
+## Worker 本地管理面板测试
+
+- 不接受非 localhost Host 或不匹配的 Origin。
+- 登录密码必须使用 scrypt 哈希；未设置密码时不允许登录。
+- Cookie 必须 HttpOnly 且 SameSite=Strict；写操作要求 CSRF token。
+- 错误登录在短时间窗口内限流；密码轮换后撤销现有会话。
+- 状态/凭证 API 不返回 DSN、密码或连接 URL。
+- 静态资源使用同源加载和 CSP，不依赖第三方 CDN；面板端口只发布到宿主机 loopback。
