@@ -68,7 +68,7 @@ cp config/datasources.example.yaml config/datasources.yaml
 - `SAFEDB_AGENT_TOKEN`
 - `SAFEDB_REVIEWER_TOKEN`
 
-将 `SAFEDB_AGENT_ID` 和 `SAFEDB_REVIEWER_ID` 设置为不同的身份标识。编辑 `config/datasources.yaml`，使其匹配实际 Schema 和表。不要将这两个本地配置文件提交到版本库。
+将 `SAFEDB_AGENT_ID` 和 `SAFEDB_REVIEWER_ID` 设置为不同的身份标识。编辑 `config/datasources.yaml`，使其匹配实际 Schema 和表。不要将这两个本地配置文件提交到版本库。静态令牌只用于本地开发；共享部署请改用下文「身份认证」中的 OIDC 配置。
 
 每个数据源都应满足以下要求：
 
@@ -152,6 +152,24 @@ docker compose up --build
 Linux 使用绑定挂载时，需预先创建 `data` 目录，并确保容器 UID/GID 10001 可写、其他非授权用户不可读写；否则 SQLite 无法初始化。不要通过将目录设为全员可写来绕过权限错误。
 
 Compose 将 API 端口绑定到 loopback 地址，并且不会把数据库 URL 环境变量传递给 API 服务。Worker 会接收数据源 URL 环境变量。生产环境应使用 Secret Manager/Vault 身份替代基于环境变量的密钥注入，并限制 Worker 的网络出口。Compose 和 SQLite 仅用于本地开发。
+
+## 身份认证
+
+API 支持两种认证模式，由是否设置 `SAFEDB_OIDC_ISSUER` 决定。
+
+**OIDC JWT（生产部署必须）**。设置后，静态令牌被忽略，所有 Agent 和审核请求必须携带由该 Issuer 签发的 Bearer 访问令牌：
+
+- `SAFEDB_OIDC_ISSUER`：例如 `https://idp.example.com/realms/safedb`。
+- `SAFEDB_OIDC_AUDIENCE`：令牌 `aud` 必须匹配；配置 Issuer 时必填。
+- `SAFEDB_OIDC_AGENT_SCOPE`（默认 `safedb:query`）和 `SAFEDB_OIDC_REVIEWER_SCOPE`（默认 `safedb:review`）：令牌必须包含对应角色的 scope，且不得同时包含两个角色的 scope，一种凭证不能同时承担提交与审批两种职责。
+- `SAFEDB_OIDC_ACTOR_CLAIM`（默认 `sub`）：作为 Agent 身份的声明，其值必须出现在数据源配置的 `allowed_agents` 中。
+- `SAFEDB_OIDC_REVIEWER_ACR`（可选）：逗号分隔的 `acr` 值白名单。设置后审核令牌必须携带匹配的 `acr`（例如 `mfa`）；是否强制多因素认证由 IdP 策略决定，网关只校验结果声明。
+
+签名密钥通过 Issuer 的 OIDC 发现文档（`/.well-known/openid-configuration` → `jwks_uri`）获取并缓存，支持密钥轮换。仅接受 RS256/ES256。令牌过期、签名错误、受众或签发方不匹配、缺少角色 scope 或密钥获取失败一律返回 401（fail-closed）。API 访问 IdP 时不使用 HTTP 代理。
+
+**静态令牌（仅限本地开发）**。未设置 `SAFEDB_OIDC_ISSUER` 时启用，即 `.env` 中的 `SAFEDB_AGENT_TOKEN` / `SAFEDB_REVIEWER_TOKEN`，首次使用会记录警告日志。
+
+MCP 客户端继续通过 `SAFEDB_AGENT_TOKEN` 环境变量携带凭据：OIDC 模式下应将其设置为当前有效的 OIDC 访问令牌。令牌续期由 MCP 宿主负责，网关不缓存或刷新令牌。
 
 ## 提交并审核查询
 
