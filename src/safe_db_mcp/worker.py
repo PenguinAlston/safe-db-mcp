@@ -4,6 +4,7 @@ import logging
 import os
 import time
 
+from safe_db_mcp.adapters.factory import AdapterUnavailable
 from safe_db_mcp.config import load_datasources
 from safe_db_mcp.service import QueryService
 from safe_db_mcp.store import ProposalStore
@@ -21,9 +22,11 @@ def run_once(store: ProposalStore, service: QueryService) -> int:
             item["status"] = "ANALYZING_WORKER"
             service.process_analysis(item)
         except Exception as exc:
+            blocked = isinstance(exc, AdapterUnavailable)
             store.update(
-                item["proposal_id"], status="FAILED",
-                error_code="ANALYSIS_FAILED",
+                item["proposal_id"],
+                status="BLOCKED" if blocked else "FAILED",
+                error_code="ADAPTER_UNAVAILABLE" if blocked else "ANALYSIS_FAILED",
             )
             # Do not log exception text: database drivers can include DSNs/SQL values.
             logger.error(
@@ -39,9 +42,11 @@ def run_once(store: ProposalStore, service: QueryService) -> int:
             item["status"] = "EXECUTING"
             service.process_execution(item)
         except Exception as exc:
+            blocked = isinstance(exc, AdapterUnavailable)
             store.update(
-                item["proposal_id"], status="FAILED",
-                error_code="EXECUTION_FAILED",
+                item["proposal_id"],
+                status="BLOCKED" if blocked else "FAILED",
+                error_code="ADAPTER_UNAVAILABLE" if blocked else "EXECUTION_FAILED",
             )
             logger.error(
                 "Execution failed for proposal %s (%s)",
