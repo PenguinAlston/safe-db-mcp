@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from safe_db_mcp.adapters.base import DatabaseAdapter
 from safe_db_mcp.security.risk import QueryPlan
@@ -95,7 +96,7 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                     ).scalar()
                     conn.rollback()
                     return int(value) == 1
-        except Exception:
+        except (SQLAlchemyError, TypeError, ValueError):
             return False
         return False
 
@@ -176,8 +177,10 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                 if self.dialect == "mysql":
                     try:
                         conn.exec_driver_sql("SET SESSION max_execution_time = 0")
-                    except Exception:
-                        pass
+                    except SQLAlchemyError:
+                        # Discard the connection rather than returning a potentially
+                        # contaminated session with a lingering timeout setting.
+                        conn.invalidate()
 
         return {
             "rows": rows_out,
