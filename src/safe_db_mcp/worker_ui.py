@@ -99,7 +99,11 @@ def create_worker_ui_app(manager: InMemoryCredentialManager) -> FastAPI:
         now = time.time()
         with lock:
             session = sessions.get(key)
-            if session is None or session["expires_at"] <= now:
+            if (
+                session is None
+                or session["expires_at"] <= now
+                or session["password_generation"] != manager.ui_password_generation()
+            ):
                 sessions.pop(key, None)
                 raise HTTPException(status_code=401, detail="Session expired")
             if require_csrf:
@@ -148,6 +152,7 @@ def create_worker_ui_app(manager: InMemoryCredentialManager) -> FastAPI:
             sessions[session_key] = {
                 "csrf": csrf,
                 "expires_at": time.time() + _SESSION_TTL_SECONDS,
+                "password_generation": manager.ui_password_generation(),
             }
         response.set_cookie(
             _SESSION_COOKIE,
