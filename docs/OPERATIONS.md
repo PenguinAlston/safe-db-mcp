@@ -4,7 +4,7 @@
 
 ## 进程隔离
 
-请将 API、Worker 和 MCP Server 作为独立进程运行。只有 Worker 可以获得数据库 URL 环境变量。
+请将 API、Worker 和 MCP Server 作为独立进程运行。只有 Worker 可以获取数据库凭证。堡垒机临时凭证推荐通过 Worker 本地凭证管理 Socket 注入，不再依赖 URL 环境变量。
 
 | 变量 | API | Worker | MCP |
 |---|---:|---:|---:|
@@ -13,7 +13,7 @@
 | `SAFEDB_DB_PATH` | 是 | 是 | 否 |
 | `SAFEDB_DATASOURCES_FILE` | 是 | 是 | 否 |
 | `SAFEDB_API_URL` | 否 | 否 | 是 |
-| `MYSQL8_URL` / `PG16_URL` / `ORACLE19C_URL` | **否** | 是，仅设置所需 URL | **否** |
+| `MYSQL8_URL` / `PG16_URL` / `ORACLE19C_URL` | **否** | 仅旧式开发兼容模式 | **否** |
 
 API 和 Worker 必须指向同一个提案存储和数据源配置。在当前原型中，这意味着二者使用同一个本地 SQLite 文件路径；使用容器时，需要挂载共享卷。
 
@@ -101,3 +101,36 @@ C1 中 SQL、参数和受限查询结果默认仍可能经过云端。部署前�
 ### 当前实现差距
 
 本仓库目前仍使用本地 SQLite 原型存储、共享存储式 Worker 轮询、静态开发令牌和本地 stdio MCP。尚未实现 PostgreSQL 控制面队列、Worker 出站任务协议、Worker 工作负载身份、远程 MCP OAuth 或凭证录入/轮换接口。以上内容是目标设计，不应被当作当前可部署功能。
+
+
+## Worker 本地临时凭证管理（已实现的第一阶段能力）
+
+对于 `credential_source.type: local_manual` 的数据源，Worker 提供仅本机 Unix Socket 管理接口。凭证仅驻留 Worker 进程内存，不写入 SQLite、YAML、普通文件或云端。Worker 重启后状态回到 `MISSING)，必须重新由管理员录入。
+
+```bash
+# 查看所有数据源凭证状态（不输出 URL/密码）
+docker compose exec worker python -m safe_db_mcp.credentials status
+
+# 隐藏输入并确认；默认有效期 450 分钟，保留 30 分钟安全余量
+docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 450
+
+# 指定堡垒机精确到期时间，必须带时区
+docker compose exec worker python -m safe_db_mcp.credentials set pg16 --expires-at 2026-11-08T02:00:00+08:00
+
+# 撤销本地缓存的凭证
+docker compose exec worker python -m safe_db_mcp.credentials clear pg16
+```
+
+凭证只通过隐藏式 CLI 输入，再通过 Worker Unix Socket 发送。Socket 目录权限为 0700、Socket 文件为 0600，并在支持的平台校验对端 UID。CLI 应以 Worker 服务用户运行。不要使用 `sudo` 或其他用户身份绕过该边界。
+
+Worker 对本地凭证实施以下状态管理：
+
+- `MISSING`：未录入；该数据源新任务保持排队。
+- `ACTIVE`：仍有超过 30 分钟有效期；可处理任务。
+- `EXPIRING`：剩余有效期不超过 30 分钟；继续处理，并输出一次状态告警。
+- `NEEDS_CREDENTIAL`：已过期或被清除；Worker 清除内存中的 DSN 并暂停该数据源新任务。
+- `INVALID`：保留给未来的验证状态；当前版本不把具体数据库连接错误转换为可见秘密或自动重试。
+
+录入时优先输入堡垒机明确显示的到期时间。若无法确认精确时间，使用保守 TTL；默认示例 450 分钟，而不是用满 480 分钟。新 DSN 先做语法和方言检查，后续首次数据库连接会验证实际可用性。Worker 每个提案独立创建适配器/连接池，因此替换凭证只影响后续新任务；正在执行的任务不会被自动迁移，若堡垒机撤销旧连接，查询会按正常执行错误处理。
+
+本阶段尚未实现桌面通知、邮件或云端告警推送。当前到期提醒体现为凭证状态和 Worker 日志告警，生产部署应将日志接入客户现有告警系统。
