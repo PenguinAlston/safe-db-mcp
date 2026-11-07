@@ -79,15 +79,31 @@ cp config/datasources.example.yaml config/datasources.yaml
 - 在该数据源通过集成测试前，保持 `auto_execute: false`。
 - 使用权限范围尽可能小的数据库账号。
 
-### 3. 仅在 Worker 环境中设置数据库 URL
+### 3. 配置 Worker 本地临时凭证
 
-使用以下 SQLAlchemy URL 格式，并通过本地密钥管理器或受保护的 Shell 环境提供凭证：
+推荐的企业/堡垒机配置使用 `credential_source.type: local_manual`，见 `config/datasources.example.yaml`。YAML 只保存数据源元数据与查询策略，不保存 `url_env` 或临时连接串。
 
-- MySQL：通过 `MYSQL8_URL` 提供，格式为 `mysql+pymysql://...`
-- PostgreSQL：通过 `PG16_URL` 提供，格式为 `postgresql+psycopg://...`
-- Oracle：通过 `ORACLE19C_URL` 提供，格式为 `oracle+oracledb://...`
+Worker 启动后会创建仅本机可访问的 Unix Socket 管理接口。管理员在 Worker 主机或 Worker 容器内，通过隐藏输入的 CLI 人工录入堡垒机签发的临时连接串：
 
-绝不要将数据库 URL 放入 `.env.example`、API 容器、MCP 客户端配置、源代码管理、日志或提示词中。只有 Worker 可以接收这些密钥。
+```bash
+# 查看数据源凭证状态，不显示任何秘密
+docker compose exec worker python -m safe_db_mcp.credentials status
+
+# 默认按 7 小时 30 分钟设置保守有效期（小于堡垒机的 8 小时上限）
+docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 450
+
+# 或填写堡垒机明确显示的过期时间（必须包含时区）
+docker compose exec worker python -m safe_db_mcp.credentials set pg16 --expires-at 2026-11-08T02:00:00+08:00
+
+# 清除某个数据源的本地凭证
+docker compose exec worker python -m safe_db_mcp.credentials clear pg16
+```
+
+CLI 使用无回显输入并要求再次确认。连接串通过 Worker 专属的本地 Unix Socket 送入 Worker 进程内存，不经过云端 API/MCP，不写入 YAML、环境变量或持久化数据库。只有与 Worker 进程相同的操作系统用户可以访问 Socket。默认采用纯内存存储：Worker 重启后需重新录入凭证。到期后 Worker 清除内存中的凭证并暂停该数据源的新任务；凭证缺失时任务保留在队列中，不会被当成查询失败处理。到期前 30 分钟进入 `EXPIRING` 状态并写入不含秘密的日志。
+
+**连接串兼容性前置检查：** 必须从运行 Worker 的实际主机验证堡垒机连接串可用。如果它依赖操作者电脑上的 localhost SSH 隧道、个人 IP 或桌面会话，不能直接复制到另一台服务器使用。
+
+旧式 `url_env` 仍为本地开发兼容模式，但不要用于人工临时凭证；该模式下数据库 URL 只注入 Worker 进程。
 
 ### 4. 启动服务
 
@@ -142,6 +158,11 @@ docker compose up --build
 Linux 使用绑定挂载时，需预先创建 `data` 目录，并确保容器 UID/GID 10001 可写、其他非授权用户不可读写；否则 SQLite 无法初始化。不要通过将目录设为全员可写来绕过权限错误。
 
 Compose 将 API 端口绑定到 loopback 地址，并且不会把数据库 URL 环境变量传递给 API 服务。Worker 会接收数据源 URL 环境变量。生产环境应使用 Secret Manager/Vault 身份替代基于环境变量的密钥注入，并限制 Worker 的网络出口。Compose 和 SQLite 仅用于本地开发。
+
+### Docker Compose 中的 Worker 凭证管理
+
+Worker 使用独立的命名卷保存本地 Unix Socket 运行目录，不包含凭证数据。CLI 在 Worker 容器内执行，默认以 Worker 的 `appuser` 身份运行。不要将凭证 CLI 暴露为公网 HTTP API，也不要通过云端 MCP 工具提交数据库连接串。
+
 
 ## 提交并审核查询
 
