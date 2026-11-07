@@ -36,7 +36,8 @@ SAFE_FUNCTIONS = {
 FORBIDDEN_NODE_NAMES = {
     "Insert", "Update", "Delete", "Merge", "Create", "Drop", "Alter",
     "Command", "Copy", "Grant", "Revoke", "Transaction", "Set", "Use",
-    "Pragma", "Attach", "Detach", "Lock", "Into",
+    "Pragma", "Attach", "Detach", "Lock", "Into", "SessionParameter",
+    "SystemParameter", "SystemVariable", "Var", "Declare", "Execute",
 }
 FORBIDDEN_ARGS = {"into", "lock", "outfile", "dumpfile", "file", "procedure"}
 
@@ -47,10 +48,7 @@ def _table_key(table: exp.Table) -> str:
 
 
 def _function_name(node: exp.Func) -> str:
-    try:
-        name = node.sql_name()
-    except Exception:
-        name = ""
+    name = node.sql_name()
     if not name or name.upper() == "ANONYMOUS":
         name = getattr(node, "name", "") or ""
     return str(name).upper()
@@ -66,7 +64,7 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
         parsed = sqlglot.parse(sql, read=datasource.dialect)
     except ParseError as exc:
         raise SQLRejected("SQL could not be parsed for the selected dialect") from exc
-    except Exception as exc:
+    except (ValueError, TypeError) as exc:
         raise SQLRejected("SQL parser failed closed") from exc
 
     statements = [tree for tree in parsed if tree is not None]
