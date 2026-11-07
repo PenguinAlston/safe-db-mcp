@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from safe_db_mcp.worker import _credential_available
 
 
@@ -90,8 +92,7 @@ def test_credential_expiry_race_returns_analysis_to_queue(tmp_path, monkeypatch)
     manager.set_credential(
         "db",
         "postgresql+psycopg://user:password@db.internal/app",
-        __import__("datetime").datetime.now(__import__("datetime").UTC)
-        + __import__("datetime").timedelta(hours=1),
+        datetime.now(UTC) + timedelta(hours=1),
     )
     monkeypatch.setattr(manager, "is_available", lambda datasource_id: True)
     monkeypatch.setattr(
