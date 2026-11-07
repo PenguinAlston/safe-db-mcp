@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 
 import sqlglot
@@ -42,9 +43,74 @@ FORBIDDEN_NODE_NAMES = {
 FORBIDDEN_ARGS = {"into", "lock", "outfile", "dumpfile", "file", "procedure"}
 
 
-def _table_key(table: exp.Table) -> str:
-    parts = [p for p in (table.db, table.name) if p]
-    return normalise_identifier(".".join(parts))
+def _reject_ambiguous_lexemes(sql: str, dialect: str) -> None:
+    # SQL comments are disabled entirely. This blocks MySQL executable comments,
+    # optimizer hints, --1 parser differentials, and ordinary comment carriers.
+    if "--" in sql or "/*" in sql or "*/" in sql:
+        raise SQLRejected("SQL comments are disabled")
+    if dialect == "mysql":
+        # MySQL lexical interpretation changes with sql_mode. Require a narrow,
+        # mode-independent subset instead of guessing the server's active mode.
+        if "#" in sql or "\\" in sql or '"' in sql:
+            raise SQLRejected(
+                "MySQL # comments, backslash escapes and double quotes are disabled"
+            )
+
+
+def _reject_bind_markers_in_quoted_text(sql: str) -> None:
+    """Reject :name tokens in quoted spans before SQLAlchemy's text() parser sees them."""
+    i = 0
+    quote: str | None = None
+    while i < len(sql):
+        char = sql[i]
+        if quote is not None:
+            if char == ":" and i + 1 < len(sql) and re.match(r"[A-Za-z_]", sql[i + 1]):
+                raise SQLRejected("Bind markers inside quoted SQL text are disabled")
+            if char == quote:
+                if i + 1 < len(sql) and sql[i + 1] == quote:
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+
+        if char in {"'", '"', "`"}:
+            quote = char
+            i += 1
+            continue
+        if char == "$":
+            match = re.match(r"\$[A-Za-z_0-9]*\$", sql[i:])
+            if match:
+                delimiter = match.group(0)
+                end = sql.find(delimiter, i + len(delimiter))
+                if end < 0:
+                    raise SQLRejected("Unterminated dollar-quoted SQL text")
+                inner = sql[i + len(delimiter):end]
+                if re.search(r"(?<!:):[A-Za-z_][A-Za-z_0-9]*", inner):
+                    raise SQLRejected(
+                        "Bind markers inside quoted SQL text are disabled"
+                    )
+                i = end + len(delimiter)
+                continue
+        i += 1
+
+
+def _table_key(table: exp.Table, dialect: str) -> str:
+    schema_node = table.args.get("db")
+    name_node = table.args.get("this")
+    if (
+        not isinstance(schema_node, exp.Identifier)
+        or not isinstance(name_node, exp.Identifier)
+        or schema_node.args.get("quoted")
+        or name_node.args.get("quoted")
+    ):
+        raise SQLRejected("Only simple, unquoted schema-qualified table names are allowed")
+
+    schema = str(schema_node.this)
+    name = str(name_node.this)
+    if dialect == "mysql" and (schema != schema.casefold() or name != name.casefold()):
+        raise SQLRejected("MySQL table identifiers must use lowercase spelling")
+    return normalise_identifier(f"{schema}.{name}")
 
 
 def _function_name(node: exp.Func) -> str:
@@ -59,6 +125,9 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
         raise SQLRejected("SQL is empty")
     if len(sql) > 50000:
         raise SQLRejected("SQL exceeds the configured length limit")
+
+    _reject_ambiguous_lexemes(sql, datasource.dialect)
+    _reject_bind_markers_in_quoted_text(sql)
 
     try:
         parsed = sqlglot.parse(sql, read=datasource.dialect)
@@ -93,6 +162,8 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
     columns: set[str] = set()
 
     for node in tree.walk():
+        if getattr(node, "comments", None):
+            raise SQLRejected("SQL comments are disabled")
         if type(node).__name__ in FORBIDDEN_NODE_NAMES:
             forbidden.append(type(node).__name__)
         for arg_name in FORBIDDEN_ARGS:
@@ -102,12 +173,14 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
         if isinstance(node, exp.Table):
             if node.catalog:
                 raise SQLRejected("Cross-catalog references are not allowed")
-            key = _table_key(node)
+            key = _table_key(node, datasource.dialect)
             if key not in datasource.allowed_tables:
                 raise SQLRejected(f"Table is not allowlisted: {key}")
             tables.add(key)
 
         if isinstance(node, exp.Column):
+            if isinstance(node.this, exp.Identifier) and node.this.args.get("quoted"):
+                raise SQLRejected("Quoted column identifiers are disabled")
             column_name = normalise_identifier(node.name)
             if column_name:
                 columns.add(column_name)
@@ -129,15 +202,21 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
         raise SQLRejected(f"Forbidden SQL construct: {forbidden[0]}")
 
     # A branch-local LIMIT does not bound a UNION/INTERSECT/EXCEPT result.
-    # Only a LIMIT attached to the root expression is a global result cap.
+    # FETCH FIRST is accepted only when attached to the root expression.
     limit_node = tree.args.get("limit")
-    has_limit = limit_node is not None
+    fetch_node = tree.args.get("fetch")
+    top_level_cap = limit_node if limit_node is not None else fetch_node
+    has_limit = top_level_cap is not None
     limit_value = None
-    if limit_node is not None:
-        limit_expression = limit_node.args.get("expression")
-        if isinstance(limit_expression, exp.Literal) and not limit_expression.is_string:
+    if top_level_cap is not None:
+        count_node = (
+            top_level_cap.args.get("expression")
+            or top_level_cap.args.get("count")
+            or top_level_cap.this
+        )
+        if isinstance(count_node, exp.Literal) and not count_node.is_string:
             try:
-                limit_value = int(limit_expression.this)
+                limit_value = int(count_node.this)
             except (TypeError, ValueError):
                 limit_value = None
 
