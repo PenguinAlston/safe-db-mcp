@@ -125,3 +125,67 @@ def test_omitted_settings_keep_integer_defaults(tmp_path):
     for key, value in expected.items():
         assert getattr(datasource, key) == value
         assert type(getattr(datasource, key)) is int
+
+
+
+def test_local_manual_credential_source_does_not_require_url_env(tmp_path):
+    config = tmp_path / "datasources.yaml"
+    config.write_text(
+        """datasources:
+  pg:
+    dialect: postgres
+    credential_source:
+      type: local_manual
+      max_ttl_minutes: 480
+    readonly_mode: postgres_transaction
+    allowed_agents: [agent]
+    allowed_tables: [public.orders]
+""",
+        encoding="utf-8",
+    )
+    datasource = load_datasources(str(config))["pg"]
+    assert datasource.url_env is None
+    assert datasource.credential_mode == "local_manual"
+    assert datasource.max_credential_ttl_minutes == 480
+
+
+def test_manual_credential_source_rejects_url_env(tmp_path):
+    config = tmp_path / "datasources.yaml"
+    config.write_text(
+        BASE + """    credential_source:
+      type: local_manual
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="cannot be combined"):
+        load_datasources(str(config))
+
+
+@pytest.mark.parametrize("ttl", [0, -1, 481, "480", "true"])
+def test_manual_credential_ttl_is_strict_and_bounded(tmp_path, ttl):
+    config = tmp_path / "datasources.yaml"
+    ttl_value = f'"{ttl}"' if isinstance(ttl, str) else str(ttl)
+    config.write_text(
+        "datasources:\n  pg:\n    dialect: postgres\n"
+        "    credential_source:\n      type: local_manual\n"
+        "      max_ttl_minutes: " + ttl_value + "\n"
+        "    readonly_mode: postgres_transaction\n"
+        "    allowed_agents: [agent]\n"
+        "    allowed_tables: [public.orders]\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_datasources(str(config))
+
+
+def test_unknown_credential_source_type_fails_closed(tmp_path):
+    config = tmp_path / "datasources.yaml"
+    config.write_text(
+        BASE.replace("    url_env: PG_URL\n", "")
+        + """    credential_source:
+      type: cloud_magic
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unsupported credential_source"):
+        load_datasources(str(config))

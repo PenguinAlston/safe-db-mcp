@@ -19,9 +19,15 @@ def iso(value: datetime) -> str:
 
 
 class QueryService:
-    def __init__(self, store: ProposalStore, datasources: dict[str, DataSource]):
+    def __init__(
+        self,
+        store: ProposalStore,
+        datasources: dict[str, DataSource],
+        credential_provider=None,
+    ):
         self.store = store
         self.datasources = datasources
+        self.credential_provider = credential_provider
 
     def _worker_update(
         self,
@@ -106,7 +112,11 @@ class QueryService:
             return
 
         from safe_db_mcp.adapters.factory import create_adapter
-        adapter = create_adapter(datasource)
+        adapter = (
+            create_adapter(datasource)
+            if self.credential_provider is None
+            else create_adapter(datasource, self.credential_provider)
+        )
         try:
             readonly = adapter.verify_readonly()
             if not readonly:
@@ -174,7 +184,11 @@ class QueryService:
             return
 
         from safe_db_mcp.adapters.factory import create_adapter
-        adapter = create_adapter(datasource)
+        adapter = (
+            create_adapter(datasource)
+            if self.credential_provider is None
+            else create_adapter(datasource, self.credential_provider)
+        )
         try:
             if not adapter.verify_readonly():
                 self._block(proposal, "READONLY_NOT_VERIFIED")

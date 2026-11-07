@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>SafeDB Worker Console</title>
+  <link rel="stylesheet" href="/static/worker.css">
+  <script src="/static/worker.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">S</span><div><strong>SafeDB</strong><small>Worker Console</small></div></div>
+    <span class="local-pill">本机管理面板</span>
+  </header>
+  <main class="layout">
+    <section id="login-card" class="panel login-panel">
+      <div class="eyebrow">LOCAL ADMINISTRATION</div>
+      <h1>Worker 本地管理</h1>
+      <p class="muted">凭证只保存在 Worker 进程内存中，不会上传到云端或写入 SQLite。</p>
+      <form id="login-form">
+        <label for="login-password">管理面板密码</label>
+        <input id="login-password" type="password" autocomplete="current-password" required>
+        <button type="submit">登录管理面板</button>
+      </form>
+      <p class="help">首次使用请先在 Worker 主机执行 <code>python -m safe_db_mcp.credentials ui-password set</code></p>
+      <p id="login-message" class="message" role="alert"></p>
+    </section>
+
+    <section id="dashboard" hidden>
+      <div class="page-heading">
+        <div><div class="eyebrow">EXECUTION NODE</div><h1>数据源凭证</h1><p class="muted">在客户内网更新堡垒机签发的临时连接串。</p></div>
+        <button id="logout" class="button-secondary" type="button">退出</button>
+      </div>
+      <div class="notice">
+        <strong>本地安全边界</strong>
+        <span>此页面仅通过本机地址访问。连接串在 Worker 本地验证后写入内存；Worker 重启后需要重新录入。</span>
+      </div>
+      <div class="section-heading"><h2>数据源状态</h2><button id="refresh" class="button-secondary" type="button">刷新</button></div>
+      <div id="datasource-list" class="datasource-list"></div>
+
+      <section class="panel credential-panel">
+        <div class="eyebrow">CREDENTIAL ROTATION</div>
+        <h2>录入 / 替换临时凭证</h2>
+        <form id="credential-form">
+          <label for="datasource">目标数据源</label>
+          <select id="datasource" required></select>
+          <label for="database-url">堡垒机数据库连接串</label>
+          <input id="database-url" type="password" autocomplete="off" spellcheck="false" required>
+          <label for="expires-at">凭证过期时间</label>
+          <input id="expires-at" type="datetime-local" required>
+          <p class="help">建议使用堡垒机显示的准确时间。若无法确认，按实际签发时间设置保守 TTL，不要超过 8 小时。</p>
+          <button id="save-credential" type="submit">验证并更新凭证</button>
+        </form>
+        <p id="credential-message" class="message" role="status"></p>
+      </section>
+      <footer>SafeDB Worker · SQLite 本地状态库 · 临时凭证仅驻留进程内存</footer>
+    </section>
+  </main>
+</body>
+</html>

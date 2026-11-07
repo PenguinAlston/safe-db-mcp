@@ -2,12 +2,14 @@ datasources:
   mysql8:
     name: MySQL 8
     dialect: mysql
-    url_env: MYSQL8_URL
+    credential_source:
+      type: local_manual
+      max_ttl_minutes: 480
     allowed_agents: [local-agent]
     readonly_mode: mysql_transaction
     allowed_tables: [sales.orders, sales.order_items]
     sensitive_columns: [customer_phone, payment_token]
-    auto_execute: true
+    auto_execute: false
     max_auto_scan_rows: 10000
     max_hard_scan_rows: 1000000
     max_result_rows: 200
@@ -16,12 +18,14 @@ datasources:
   pg16:
     name: PostgreSQL 16
     dialect: postgres
-    url_env: PG16_URL
+    credential_source:
+      type: local_manual
+      max_ttl_minutes: 480
     allowed_agents: [local-agent]
     readonly_mode: postgres_transaction
     allowed_tables: [public.customers, public.user_profiles]
     sensitive_columns: [email, phone, password_hash]
-    auto_execute: true
+    auto_execute: false
     max_auto_scan_rows: 5000
     max_hard_scan_rows: 500000
     max_result_rows: 100
@@ -30,7 +34,9 @@ datasources:
   oracle19c:
     name: Oracle 19c
     dialect: oracle
-    url_env: ORACLE19C_URL
+    credential_source:
+      type: local_manual
+      max_ttl_minutes: 480
     allowed_agents: [local-agent]
     readonly_mode: oracle_transaction
     allowed_tables: [FINANCE.INVOICES, FINANCE.PAYMENTS]

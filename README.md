@@ -79,15 +79,36 @@ cp config/datasources.example.yaml config/datasources.yaml
 - 在该数据源通过集成测试前，保持 `auto_execute: false`。
 - 使用权限范围尽可能小的数据库账号。
 
-### 3. 仅在 Worker 环境中设置数据库 URL
+### 3. 配置 Worker 本地临时凭证
 
-使用以下 SQLAlchemy URL 格式，并通过本地密钥管理器或受保护的 Shell 环境提供凭证：
+推荐的企业/堡垒机配置使用 `credential_source.type: local_manual`，见 `config/datasources.example.yaml`。YAML 只保存数据源元数据与查询策略，不保存 `url_env` 或临时连接串。
 
-- MySQL：通过 `MYSQL8_URL` 提供，格式为 `mysql+pymysql://...`
-- PostgreSQL：通过 `PG16_URL` 提供，格式为 `postgresql+psycopg://...`
-- Oracle：通过 `ORACLE19C_URL` 提供，格式为 `oracle+oracledb://...`
+Worker 启动后会同时提供本机 Web 管理面板和 Unix Socket 管理接口。推荐日常通过浏览器面板管理凭证；CLI 仍可用于无图形环境的服务器：
 
-绝不要将数据库 URL 放入 `.env.example`、API 容器、MCP 客户端配置、源代码管理、日志或提示词中。只有 Worker 可以接收这些密钥。
+```bash
+# 首次设置 Web 面板密码（仅需执行一次；Worker 重启后需重新设置）
+docker compose exec worker python -m safe_db_mcp.credentials ui-password set
+
+# 浏览器打开 http://127.0.0.1:8090，登录后即可查看状态、录入/替换/清除凭证
+
+# CLI 方式：查看数据源凭证状态，不显示任何秘密
+docker compose exec worker python -m safe_db_mcp.credentials status
+
+# 默认按 7 小时设置保守有效期（为人工申请、复制和录入过程预留 1 小时余量）
+docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 420
+
+# 或填写堡垒机明确显示的过期时间（必须包含时区）
+docker compose exec worker python -m safe_db_mcp.credentials set pg16 --expires-at 2026-11-08T02:00:00+08:00
+
+# 清除某个数据源的本地凭证
+docker compose exec worker python -m safe_db_mcp.credentials clear pg16
+```
+
+CLI 使用无回显输入并要求再次确认。连接串通过 Worker 专属的本地 Unix Socket 送入 Worker 进程内存，不经过云端 API/MCP，不写入 YAML、环境变量或持久化数据库。Worker 会先使用候选连接串验证数据库原生只读能力和配置表目录，成功后才替换当前凭证；验证失败不会覆盖旧凭证。只有与 Worker 进程相同的操作系统用户可以访问 Socket。默认采用纯内存存储：Worker 重启后需重新录入凭证。到期后 Worker 清除内存中的凭证并暂停该数据源的新任务；凭证缺失时任务保持原状态排队，不会被当成查询失败处理；但提案仍受默认 15 分钟自身有效期约束，过期后会按正常提案生命周期失效。到期前 30 分钟进入 `EXPIRING` 状态并写入不含秘密的日志。
+
+**连接串兼容性前置检查：** 必须从运行 Worker 的实际主机验证堡垒机连接串可用。如果它依赖操作者电脑上的 localhost SSH 隧道、个人 IP 或桌面会话，不能直接复制到另一台服务器使用。
+
+旧式 `url_env` 仍为本地开发兼容模式，但不要用于人工临时凭证；该模式下数据库 URL 只注入 Worker 进程。
 
 ### 4. 启动服务
 
@@ -102,20 +123,24 @@ set +a
 uvicorn safe_db_mcp.api:app --host 127.0.0.1 --port 8080
 ```
 
-终端 2 — Worker（从仅供 Worker 使用的密钥来源加载数据源 URL）：
+终端 2 — Worker（不注入数据库 URL；启动本机管理面板和 Socket）：
 
 ```bash
 export SAFEDB_DB_PATH=./data/safedb.sqlite3
 export SAFEDB_DATASOURCES_FILE=./config/datasources.yaml
-# 仅注入此 Worker 所需的数据源 URL，例如从 Vault
-# 或本地密钥管理器注入。不要将这些值加入 API 的环境变量。
-read -r -s -p "PG16_URL: " PG16_URL
-export PG16_URL
-printf '\\n'
+# local_manual 模式不需要数据库 URL 环境变量
 python -m safe_db_mcp.worker
 ```
 
-API 使用的 `.env` 中不得包含数据库 URL。Worker 不加载包含 Agent/Reviewer Token 的 `.env`，只注入存储路径、数据源配置及所需数据库密钥。使用 Compose 时，数据库 URL 只传递给 Worker 服务。
+终端 4 — 首次设置本机管理面板密码（同 Worker OS 用户）：
+
+```bash
+python -m safe_db_mcp.credentials ui-password set
+```
+
+然后浏览器访问 `http://127.0.0.1:8090`。管理面板默认仅监听 loopback。
+
+API 使用的 `.env` 中不得包含数据库 URL。Worker 不加载包含 Agent/Reviewer Token 的 `.env`，只注入存储路径和数据源配置。堡垒机临时连接串通过 Worker 本地凭证 CLI 录入。
 
 终端 3 — MCP Server（使用未加载 API 或 Worker 密钥的新终端，不要 `source .env`）：
 
@@ -135,13 +160,22 @@ MCP Server 默认使用 stdio。配置 MCP 客户端运行 `python -m safe_db_mc
 cp .env.example .env
 cp config/datasources.example.yaml config/datasources.yaml
 # 编辑 .env（仅包含 Agent/审核配置）和数据源 YAML。
-# 从密钥管理器将仅供 Worker 使用的数据库 URL 导出到当前 Shell，然后执行：
-docker compose up --build
+# 启动 API 和 Worker；先不要向任何容器注入数据库 URL
+docker compose up --build -d
+# 设置 Worker 本地管理面板密码
+docker compose exec worker python -m safe_db_mcp.credentials ui-password set
+
+# 然后浏览器访问 http://127.0.0.1:8090，登录后录入 pg16 临时连接串
 ```
 
-Linux 使用绑定挂载时，需预先创建 `data` 目录，并确保容器 UID/GID 10001 可写、其他非授权用户不可读写；否则 SQLite 无法初始化。不要通过将目录设为全员可写来绕过权限错误。
+Linux 使用绑定挂载时，需预先创建 `data` 目录，并确保容器 UID/GID 10001 可写、其他非授权用户不可读写；否则 SQLite 无法初始化。不要通过将目录设为全员可写来绕过权限错误。Worker 的 `worker-run` 命名卷由镜像预设为 UID 10001 的私有目录。
 
-Compose 将 API 端口绑定到 loopback 地址，并且不会把数据库 URL 环境变量传递给 API 服务。Worker 会接收数据源 URL 环境变量。生产环境应使用 Secret Manager/Vault 身份替代基于环境变量的密钥注入，并限制 Worker 的网络出口。Compose 和 SQLite 仅用于本地开发。
+Compose 将 API 和 Worker 管理面板端口均绑定到宿主机 loopback 地址。API 和 Worker 均不接收数据库 URL 环境变量。Worker 从本机凭证管理器读取进程内存中的临时凭证。当前保留 SQLite，适用于 API 与单个 Worker 同机运行的单节点部署；数据库文件必须位于本机可靠磁盘，不得放在 NFS/SMB 等网络共享文件系统。此部署形态仍是安全原型，不是多节点 SaaS。
+
+### Docker Compose 中的 Worker 凭证管理
+
+Worker 使用独立的命名卷保存本地 Unix Socket 运行目录，不包含凭证数据。管理面板默认仅映射到宿主机 `127.0.0.1:8090`，浏览器访问 `http://127.0.0.1:8090`。首次需在 Worker 容器内设置面板密码：`docker compose exec worker python -m safe_db_mcp.credentials ui-password set`。密码哈希和登录会话均仅保存在 Worker 进程内存中；Worker 重启后需重新设置。不要将端口改为公网或局域网监听，也不要通过云端 MCP 工具提交数据库连接串。
+
 
 ## 提交并审核查询
 
@@ -253,3 +287,8 @@ CI 会在 Python 3.12 上运行这些命令。单元测试使用 Mock 和临时 
 - 单个超大字段或 LOB 仍可能在应用层字节数限制生效前，就被数据库驱动完整加载到内存中。
 
 启用任何数据源前，请先阅读 [SECURITY.md](SECURITY.md)。
+
+
+## 企业目标架构方向
+
+下一阶段以“云端控制面 + 客户内网 Worker（C1）”为企业目标架构。客户内网 Worker 负责访问数据库并保管数据库临时凭证；云端负责身份、审批和任务控制。当前堡垒机若只能人工签发约 8 小时凭证，管理员将在客户内网本地录入，Worker 管理到期提醒、停单和连接池切换，不需要频繁修改 YAML。**本地 Worker 凭证管理和管理面板已实现；云端远程 Worker 任务协议、远程 MCP/OAuth 和多租户控制面尚未实现**，项目仍为安全原型。详见 [架构决策 ADR-0001](docs/adr/0001-customer-network-worker.md)。
