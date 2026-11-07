@@ -77,7 +77,7 @@ def assess_risk(
         and rows <= datasource.max_auto_scan_rows
         and query.limit_value is not None
         and 0 < query.limit_value <= datasource.max_result_rows
-        and not (set(query.columns) & datasource.sensitive_columns)
+        and not (set(query.columns) & set(datasource.sensitive_columns))
     )
 
     return RiskAssessment(

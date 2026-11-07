@@ -74,10 +74,12 @@ cp config/datasources.example.yaml config/datasources.yaml
 
 - `allowed_tables` 必须使用带 Schema 的表名（例如 `public.orders`）。
 - `allowed_agents` 仅列出确实获准使用该数据源的 Agent ID。
-- `sensitive_columns` 必须是列名字符串列表，例如 `[payment_token]`；数值限额必须是 YAML 整数，不接受布尔值、小数或数字字符串。
+- `sensitive_columns` 必须是「列名 → 脱敏策略」映射，例如 `{payment_token: hash}`，策略取值为 `mask`（等长星号）、`hash`（SHA-256 前 12 位，可等值比较）、`redact`（固定占位符）或 `null`；数值限额必须是 YAML 整数，不接受布尔值、小数或数字字符串。
 - MySQL 仅接受 InnoDB 基表；PostgreSQL 拒绝分区父表、有继承子表的表，以及包含非 `pg_catalog` 基础类型列的表。
 - 在该数据源通过集成测试前，保持 `auto_execute: false`。
 - 使用权限范围尽可能小的数据库账号。
+
+敏感列的行为：SQL 校验只允许敏感列以「裸投影且输出列名不变」的形式出现（别名改名、套函数、WHERE/ORDER BY 引用、集合操作都会被拒绝），因此 Worker 可以按结果列名可靠匹配并脱敏。脱敏在 Worker 落库之前完成，持久化结果与 API 返回都只见脱敏后的值。触及敏感列的查询永远不会自动执行，必须经人工审批。`mask` 会保留值长度，`hash` 对低熵值可被字典还原——按数据形态选择策略。
 
 ### 3. 仅在 Worker 环境中设置数据库 URL
 

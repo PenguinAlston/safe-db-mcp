@@ -22,7 +22,7 @@ def api_client(tmp_path, monkeypatch):
     monkeypatch.setenv("SAFEDB_AGENT_ID", "agent")
     datasource = DataSource(
         "db", "test", "postgres", "UNUSED_TEST_SECRET", "postgres_transaction",
-        frozenset({"public.items"}), frozenset(), False,
+        frozenset({"public.items"}), {}, False,
         1000, 10000, 100, 100000, 1000, frozenset({"agent"}),
     )
     datasources = {"db": datasource}

@@ -48,23 +48,33 @@ def test_result_limits_must_be_positive(tmp_path):
 
 
 @pytest.mark.parametrize("value", [
-    "email", "{email: blocked}", "null", "[true]", "[1]", "[null]", "[email, false]",
+    "email", "[email]", "{email: blocked}", "{email: null}", "null", "[true]",
 ])
-def test_sensitive_columns_requires_a_list_of_strings(tmp_path, value):
+def test_sensitive_columns_require_policy_mappings(tmp_path, value):
     config = tmp_path / "datasources.yaml"
     config.write_text(BASE + f"    sensitive_columns: {value}\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="sensitive_columns must be a list of strings"):
+    with pytest.raises(ValueError, match="sensitive_columns"):
         load_datasources(str(config))
 
 
 @pytest.mark.parametrize("value, expected", [
-    ("[]", frozenset()),
-    ("[EMAIL, password_hash]", frozenset({"email", "password_hash"})),
+    ("{}", {}),
+    ("{EMAIL: mask, password_hash: hash}",
+     {"email": "mask", "password_hash": "hash"}),
 ])
-def test_sensitive_columns_accepts_string_lists(tmp_path, value, expected):
+def test_sensitive_columns_accept_policy_mappings(tmp_path, value, expected):
     config = tmp_path / "datasources.yaml"
     config.write_text(BASE + f"    sensitive_columns: {value}\n", encoding="utf-8")
     assert load_datasources(str(config))["pg"].sensitive_columns == expected
+
+
+def test_sensitive_columns_reject_qualified_names(tmp_path):
+    config = tmp_path / "datasources.yaml"
+    config.write_text(
+        BASE + "    sensitive_columns: {public.email: mask}\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="unqualified column names"):
+        load_datasources(str(config))
 
 
 RESOURCE_FIELDS = [
@@ -120,7 +130,7 @@ def test_omitted_settings_keep_integer_defaults(tmp_path):
     config = tmp_path / "datasources.yaml"
     config.write_text(BASE.replace("    timeout_ms: 1000\n", ""), encoding="utf-8")
     datasource = load_datasources(str(config))["pg"]
-    assert datasource.sensitive_columns == frozenset()
+    assert datasource.sensitive_columns == {}
     expected = dict(zip(RESOURCE_FIELDS, [0, 0, 100, 524288, 5000]))
     for key, value in expected.items():
         assert getattr(datasource, key) == value

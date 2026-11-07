@@ -114,6 +114,22 @@ def _reject_bind_markers_in_quoted_text(sql: str) -> None:
         i += 1
 
 
+def _is_redactable_projection(node: exp.Column, column_name: str) -> bool:
+    """A sensitive column may appear only as a projection whose output name is
+    the column itself: that is the one shape whose values the worker can
+    reliably redact by result column name."""
+    parent = node.parent
+    if isinstance(parent, exp.Alias):
+        if node.arg_key != "this":
+            return False
+        return (
+            parent.arg_key == "expressions"
+            and isinstance(parent.parent, exp.Select)
+            and parent.output_name.casefold() == column_name
+        )
+    return node.arg_key == "expressions" and isinstance(parent, exp.Select)
+
+
 def _table_key(table: exp.Table, dialect: str) -> str:
     schema_node = table.args.get("db")
     name_node = table.args.get("this")
@@ -299,8 +315,13 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
                 raise SQLRejected("Whole-row references are disabled")
             if column_name:
                 columns.add(column_name)
-                if column_name in datasource.sensitive_columns:
-                    raise SQLRejected(f"Sensitive column is blocked: {column_name}")
+                if column_name in datasource.sensitive_columns and not (
+                    _is_redactable_projection(node, column_name)
+                ):
+                    raise SQLRejected(
+                        f"Sensitive column may only be projected unaliased for "
+                        f"redaction: {column_name}"
+                    )
 
         # Conservative MVP: wildcard projections and COUNT(*) are both blocked.
         if isinstance(node, exp.Star):
@@ -337,6 +358,16 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
 
     joins = sum(1 for _ in tree.find_all(exp.Join))
     selects = sum(1 for _ in tree.find_all(exp.Select))
+
+    # Set-operation output column names come from the first branch only, so a
+    # sensitive value could surface under a different name and skip redaction.
+    if (
+        columns & set(datasource.sensitive_columns)
+        and tree.find(exp.Union, exp.Intersect, exp.Except) is not None
+    ):
+        raise SQLRejected(
+            "Set operations over sensitive columns are not supported"
+        )
 
     digest_payload = json.dumps(
         {"sql": sql, "parameters": parameters},

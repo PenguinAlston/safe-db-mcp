@@ -16,7 +16,7 @@ def datasource():
         url_env="DB_URL",
         readonly_mode="postgres_transaction",
         allowed_tables=frozenset({"public.orders", "public.customers"}),
-        sensitive_columns=frozenset({"password_hash", "email"}),
+        sensitive_columns={"password_hash": "mask", "email": "redact"},
         auto_execute=True,
         max_auto_scan_rows=1000,
         max_hard_scan_rows=10000,
@@ -54,11 +54,39 @@ def test_unsafe_sql_is_rejected(datasource, sql):
         validate_sql(sql, datasource, {})
 
 
-def test_sensitive_column_is_rejected(datasource):
-    with pytest.raises(SQLRejected):
-        validate_sql(
-            "SELECT email FROM public.customers LIMIT 5", datasource, {}
-        )
+def test_bare_sensitive_projection_is_allowed_for_redaction(datasource):
+    result = validate_sql(
+        "SELECT email FROM public.customers LIMIT 5", datasource, {}
+    )
+    assert "email" in result.columns
+    result = validate_sql(
+        "SELECT email AS email FROM public.customers LIMIT 5", datasource, {}
+    )
+    assert "email" in result.columns
+    result = validate_sql(
+        "SELECT c.email FROM public.customers AS c LIMIT 5", datasource, {}
+    )
+    assert "email" in result.columns
+    result = validate_sql(
+        "SELECT email FROM (SELECT email FROM public.customers) sub LIMIT 5",
+        datasource, {},
+    )
+    assert "email" in result.columns
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT email AS e FROM public.customers LIMIT 5",
+    "SELECT LOWER(email) FROM public.customers LIMIT 5",
+    "SELECT LOWER(c.email) FROM public.customers AS c LIMIT 5",
+    "SELECT id FROM public.orders WHERE email = 'x' LIMIT 5",
+    "SELECT id FROM public.orders ORDER BY email LIMIT 5",
+    "SELECT id FROM public.customers UNION SELECT email FROM public.customers",
+    "SELECT email FROM (SELECT email AS e FROM public.customers) sub LIMIT 5",
+    "SELECT UPPER(email) FROM public.customers GROUP BY UPPER(email) LIMIT 5",
+])
+def test_sensitive_values_may_not_escape_redacted_output_name(datasource, sql):
+    with pytest.raises(SQLRejected, match="Sensitive column|Set operations"):
+        validate_sql(sql, datasource, {})
 
 
 def test_unknown_function_is_rejected(datasource):
@@ -88,7 +116,7 @@ def mysql_datasource():
         url_env="MYSQL_URL",
         readonly_mode="mysql_transaction",
         allowed_tables=frozenset({"sales.orders"}),
-        sensitive_columns=frozenset({"payment_token"}),
+        sensitive_columns={"payment_token": "hash"},
         auto_execute=True,
         max_auto_scan_rows=1000,
         max_hard_scan_rows=10000,
@@ -267,15 +295,6 @@ def test_whole_row_references_are_rejected(datasource, sql):
 ])
 def test_qualified_column_references_remain_valid(datasource, sql):
     assert validate_sql(sql, datasource, {}).columns == ("id",)
-
-
-@pytest.mark.parametrize("sql", [
-    "SELECT c.email FROM public.customers AS c",
-    "SELECT LOWER(c.email) FROM public.customers AS c",
-])
-def test_direct_sensitive_columns_stay_blocked_with_aliases(datasource, sql):
-    with pytest.raises(SQLRejected, match="Sensitive column"):
-        validate_sql(sql, datasource, {})
 
 
 @pytest.mark.parametrize("dialect", ["postgres", "oracle"])
