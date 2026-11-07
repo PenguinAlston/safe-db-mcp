@@ -1,0 +1,35 @@
+services:
+  api:
+    build: .
+    command: uvicorn safe_db_mcp.api:app --host 0.0.0.0 --port 8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      SAFEDB_DB_PATH: /data/safedb.sqlite3
+      SAFEDB_DATASOURCES_FILE: /app/config/datasources.yaml
+      SAFEDB_AGENT_TOKEN: ${SAFEDB_AGENT_TOKEN:?set SAFEDB_AGENT_TOKEN}
+      SAFEDB_REVIEWER_TOKEN: ${SAFEDB_REVIEWER_TOKEN:?set SAFEDB_REVIEWER_TOKEN}
+      SAFEDB_AGENT_ID: ${SAFEDB_AGENT_ID:-agent-dev}
+      SAFEDB_REVIEWER_ID: ${SAFEDB_REVIEWER_ID:-reviewer-dev}
+    volumes:
+      - ./data:/data
+      - ./config:/app/config:ro
+    # API intentionally receives no database URL variables.
+
+  worker:
+    build: .
+    command: python -m safe_db_mcp.worker
+    environment:
+      SAFEDB_DB_PATH: /data/safedb.sqlite3
+      SAFEDB_DATASOURCES_FILE: /app/config/datasources.yaml
+      SAFEDB_WORKER_INTERVAL_SECONDS: 1
+      DB_A_URL: ${DB_A_URL:-}
+      DB_B_URL: ${DB_B_URL:-}
+      DB_C_URL: ${DB_C_URL:-}
+      DB_D_URL: ${DB_D_URL:-}
+    volumes:
+      - ./data:/data
+      - ./config:/app/config:ro
+    # Use a worker-only secret file / Secret Manager in production.
+    # Restrict this service's network egress to approved database endpoints.
+    # Do not expose worker ports.
