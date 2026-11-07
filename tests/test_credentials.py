@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import socket
-import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -57,7 +57,6 @@ def test_expired_credential_is_erased_and_fails_closed():
         datetime.now(UTC) + timedelta(milliseconds=10),
     )
     assert credentials.is_available("pg")
-    import time
     time.sleep(0.03)
     assert not credentials.is_available("pg")
     assert credentials.status("pg")["state"] == "NEEDS_CREDENTIAL"
