@@ -54,20 +54,18 @@ def normalise_identifier(value: str) -> str:
 
 
 def _positive_int(item: dict[str, Any], key: str, default: int) -> int:
-    try:
-        value = int(item.get(key, default))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{key} must be an integer") from exc
+    value = item.get(key, default)
+    if type(value) is not int:
+        raise ValueError(f"{key} must be an integer")
     if value <= 0:
         raise ValueError(f"{key} must be greater than zero")
     return value
 
 
 def _nonnegative_int(item: dict[str, Any], key: str, default: int) -> int:
-    try:
-        value = int(item.get(key, default))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{key} must be an integer") from exc
+    value = item.get(key, default)
+    if type(value) is not int:
+        raise ValueError(f"{key} must be an integer")
     if value < 0:
         raise ValueError(f"{key} must not be negative")
     return value
@@ -123,9 +121,12 @@ def load_datasources(path: str | None = None) -> dict[str, DataSource]:
         if dialect not in {"mysql", "postgres", "oracle"}:
             raise ValueError(f"{datasource_id}: unsupported dialect: {dialect}")
 
-        sensitive = frozenset(
-            normalise_identifier(str(x)) for x in item.get("sensitive_columns", [])
-        )
+        sensitive_values = item.get("sensitive_columns", [])
+        if not isinstance(sensitive_values, list) or any(
+            not isinstance(value, str) for value in sensitive_values
+        ):
+            raise ValueError(f"{datasource_id}: sensitive_columns must be a list of strings")
+        sensitive = frozenset(normalise_identifier(value) for value in sensitive_values)
         if any("." in key for key in sensitive):
             raise ValueError(
                 f"{datasource_id}: sensitive_columns must use unqualified column names"
