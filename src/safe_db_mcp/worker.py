@@ -14,6 +14,8 @@ logger = logging.getLogger("safedb.worker")
 
 
 def run_once(store: ProposalStore, service: QueryService) -> int:
+    lease_seconds = int(os.getenv("SAFEDB_WORKER_LEASE_SECONDS", "600"))
+    store.recover_stale_claims(lease_seconds)
     processed = 0
     for item in store.list_status("ANALYZING", limit=10):
         if not store.claim(item["proposal_id"], "ANALYZING", "ANALYZING_WORKER"):
