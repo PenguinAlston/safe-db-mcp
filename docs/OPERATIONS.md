@@ -49,6 +49,17 @@ docker compose exec worker python -m safe_db_mcp.credentials ui-password set
 
 在无浏览器的服务器上，仍可继续使用 Unix Socket CLI。UI 启动失败时 Worker 会记录不含凭证的错误类型，并保留 CLI 管理能力。
 
+### SQLite 在线备份
+
+单节点方案应为 SQLite 数据建立定期一致性备份。可以使用 SQLite Online Backup API，而不是在 WAL 写入期间只复制主数据库文件：
+
+```bash
+docker compose exec worker python -c 'import sqlite3; src=sqlite3.connect("/data/safedb.sqlite3"); dst=sqlite3.connect("/data/safedb-backup.sqlite3"); src.backup(dst); dst.close(); src.close()'
+```
+
+备份文件随后应由客户备份流程加密并复制到独立备份位置；不要把备份长期留在同一磁盘作为唯一副本。按客户 RPO/RTO 要求定期执行恢复演练。该命令备份提案/审核/结果/审计状态，不备份 Worker 进程内存中的 DSN 或管理面板会话；重启后仍需重新录入凭证和设置面板密码。
+
+
 ## 健康检查与接口
 
 - `GET /health` 仅用于检查 API 进程是否存活，不是数据库就绪探针。
