@@ -1,75 +1,75 @@
-# Architecture
+# 系统架构
 
-## Components
+## 组件
 
-| Component | Responsibility | Database credentials |
+| 组件 | 职责 | 是否持有数据库凭证 |
 |---|---|---|
-| Agent / MCP client | Submit SELECT intent; poll status and fetch own results | No |
-| MCP server | Thin authenticated HTTP client for the API | No |
-| API | Authenticate Agent/reviewer, validate request, persist proposal, expose status/review endpoints | No |
-| Worker | Claim proposals, resolve datasource secret, validate again, plan, execute in native read-only transaction, persist result | Yes, scoped to required datasources |
-| Proposal store | Persist proposal lifecycle and audit events | No database-target credentials |
-| Reviewer | Review query, purpose and risk snapshot; approve/reject with reason | Reviewer token only |
+| Agent / MCP 客户端 | 提交 SELECT 意图、轮询状态并获取自身查询结果 | 否 |
+| MCP Server | 面向 API 的轻量级身份验证 HTTP 客户端 | 否 |
+| API | 验证 Agent/Reviewer 身份、校验请求、持久化提案、提供状态/审核接口 | 否 |
+| Worker | 认领提案、解析数据源密钥、再次校验、规划查询、在原生只读事务中执行并持久化结果 | 是，仅限所需数据源 |
+| Proposal Store（提案存储） | 持久化提案生命周期和审计事件 | 不持有目标数据库凭证 |
+| Reviewer（审核员） | 审核查询、用途和风险快照；附带原因批准或拒绝 | 仅持有审核令牌 |
 
-## Proposal lifecycle
+## 提案生命周期
 
-```text
-Agent submits
+\`\`\`text
+Agent 提交
      |
      v
  ANALYZING
      |
-     | worker atomically claims with unique fencing token
+     | Worker 使用唯一 fencing token 原子认领
      v
 ANALYZING_WORKER
      |
-     +---- validation/object/read-only failure ----> BLOCKED
+     +---- 校验/对象/只读模式失败 ----------> BLOCKED
      |
-     +---- low risk and all auto gates pass -------> execute in claimed
-     |                                                ANALYZING_WORKER
-     |                                                     |
-     |                                                 SUCCEEDED
+     +---- 低风险且所有自动门禁通过 --------> 在已认领状态下执行
+     |                                           ANALYZING_WORKER
+     |                                                |
+     |                                            SUCCEEDED
      |
-     +---- human review required ------------------> PENDING_APPROVAL
-                                                       |
-                                                reviewer decision
-                                                  /       \
-                                             REJECTED    APPROVED
-                                                           |
-                                                   worker claims with
-                                                   a new fencing token
-                                                           |
-                                                      EXECUTING
-                                                           |
-                                            revalidate/replan/risk compare
+     +---- 需要人工审核 ---------------------> PENDING_APPROVAL
+                                                   |
+                                                审核员决策
+                                                /       \
+                                           REJECTED    APPROVED
+                                                          |
+                                                  Worker 使用新的
+                                                  fencing token 认领
+                                                          |
+                                                     EXECUTING
+                                                          |
+                                             重新校验/重新规划/风险比较
                                                   /             \
-                                         BLOCKED or review     execute
-                                                                 |
-                                                             SUCCEEDED
-```
+                                         BLOCKED 或重新审核       执行
+                                                                  |
+                                                              SUCCEEDED
+\`\`\`
 
-Expired claims are recovered to `ANALYZING` or `APPROVED`. Lease recovery clears the previous fencing token. Every worker write checks the current token and expected state so an old process cannot publish a result after the claim has moved.
+过期任务认领会被恢复到 \`ANALYZING\` 或 \`APPROVED\`。租约恢复时会清除之前的 fencing token。每次 Worker 写入都必须检查当前 token 和预期状态，确保旧进程无法在任务被转交后发布结果。
 
-## Execution gates
+## 执行门禁
 
-Before executing user SQL, the worker must:
+在执行用户 SQL 之前，Worker 必须：
 
-1. Check proposal expiry, requester permission and stored query/parameter hash.
-2. Re-parse SQL under the selected dialect.
-3. Verify native read-only support on a fresh connection.
-4. Resolve every referenced object in the database catalog and accept only supported base-table objects.
-5. Run a bounded EXPLAIN where safe; Oracle EXPLAIN PLAN is deliberately skipped because it writes PLAN_TABLE.
-6. Recalculate risk and compare the approval snapshot. Any change invalidates the approval.
-7. Re-check that the worker still owns the fencing token immediately before execution.
-8. Execute inside a native read-only transaction with time/resource limits.
-9. Bound rows and serialized result bytes, reset or invalidate the connection, and publish the result only if the claim is still current.
+1. 检查提案是否过期、请求者是否有权限，以及存储的查询/参数哈希是否匹配。
+2. 使用所选数据库方言重新解析 SQL。
+3. 在新连接上验证数据库原生只读能力。
+4. 在数据库目录中解析所有被引用对象，并且只接受受支持的基表对象。
+5. 在安全的情况下运行有界 EXPLAIN；Oracle 的 EXPLAIN PLAN 会写入 \`PLAN_TABLE\`，因此有意跳过。
+6. 重新计算风险并与审批快照比较。任何变化都会使原审批失效。
+7. 执行前再次确认 Worker 仍持有当前 fencing token。
+8. 在具备时间和资源限制的数据库原生只读事务中执行。
+9. 限制结果行数和序列化后的结果字节数，重置或使连接失效；只有在任务认领仍有效时才允许发布结果。
 
-## Persistence
+## 持久化
 
-SQLite is the development store. Its transactions make the current single-host claim/CAS behavior testable, but SQLite is not the production multi-replica queue. A PostgreSQL-backed production store must retain atomic claim, fencing token validation, lease recovery, and transactionally coupled audit writes.
+SQLite 是开发环境使用的存储。它的事务机制可以测试当前单机任务认领/CAS 行为，但 SQLite 不是适用于生产多副本场景的队列。生产环境的 PostgreSQL 存储必须保留原子任务认领、fencing token 校验、租约恢复，以及与状态写入处于同一事务中的审计记录写入。
 
-## Security boundary
+## 安全边界
 
-Native read-only transactions constrain the current transaction; they do not make a privileged account safe. Use database accounts with least privilege, remove MySQL temporary-table creation privileges, restrict network egress, and keep the API/MCP isolated from database secrets.
+原生只读事务约束的是当前事务，并不能让高权限数据库账号变得安全。必须使用最小权限数据库账号，移除 MySQL 创建临时表的权限，限制网络出口，并确保 API/MCP 与数据库密钥隔离。
 
-Table allowlists are not row-level or column-level controls. Sensitive columns, tenant/row predicates, data redaction, credential rotation, rate limits, external immutable audit storage, and production-grade identity are still required before production.
+表白名单不等同于行级或列级控制。在投入生产前，仍需实现敏感列策略、租户/行级过滤、数据脱敏、凭证轮换、速率限制、外部不可篡改审计存储，以及生产级身份验证。
