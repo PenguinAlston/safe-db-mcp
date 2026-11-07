@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from safe_db_mcp.config import DataSource
@@ -11,7 +11,7 @@ from safe_db_mcp.store import ProposalStore
 
 
 def now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def iso(value: datetime) -> str:
