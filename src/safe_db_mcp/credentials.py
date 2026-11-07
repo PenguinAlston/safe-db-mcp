@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import logging
 import os
 import socket
 import stat
@@ -22,6 +23,7 @@ _MAX_MESSAGE_BYTES = 16 * 1024
 _MAX_URL_BYTES = 8 * 1024
 _DEFAULT_SOCKET = "./run/safedb/credentials.sock"
 _DEFAULT_TTL_MINUTES = 420
+logger = logging.getLogger("safedb.credentials")
 
 
 class CredentialUnavailable(RuntimeError):
@@ -315,13 +317,14 @@ class CredentialSocketServer:
         return parsed
 
     def _handle(self, conn: socket.socket) -> None:
+        peer_uid: int | str = "unknown"
         try:
             if hasattr(socket, "SO_PEERCRED"):
                 raw = conn.getsockopt(
                     socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
                 )
-                _, uid, _ = struct.unpack("3i", raw)
-                if uid != os.geteuid():
+                _, peer_uid, _ = struct.unpack("3i", raw)
+                if peer_uid != os.geteuid():
                     raise PermissionError("Credential socket peer is not authorized")
             request = self._read_message(conn)
             operation = request.get("operation")
@@ -330,6 +333,12 @@ class CredentialSocketServer:
                     request.get("datasource_id"),
                     request.get("database_url"),
                     datetime.fromisoformat(request.get("expires_at")),
+                )
+                logger.info(
+                    "datasource_credential.installed datasource=%s actor_uid=%s "
+                    "version=%s expires_at=%s",
+                    status["datasource_id"], peer_uid, status["version"],
+                    status["expires_at"],
                 )
                 response = {"ok": True, "status": status}
             elif operation == "status":
@@ -342,14 +351,20 @@ class CredentialSocketServer:
                     ),
                 }
             elif operation == "clear":
-                response = {
-                    "ok": True,
-                    "status": self.manager.clear_credential(request.get("datasource_id")),
-                }
+                status = self.manager.clear_credential(request.get("datasource_id"))
+                logger.warning(
+                    "datasource_credential.cleared datasource=%s actor_uid=%s version=%s",
+                    status["datasource_id"], peer_uid, status["version"],
+                )
+                response = {"ok": True, "status": status}
             else:
                 raise ValueError("Unsupported operation")
-        except Exception:
-            # Never return exception text: database URLs and driver errors can contain secrets.
+        except Exception as exc:
+            # Never log/return exception text: it may contain supplied secrets.
+            logger.warning(
+                "datasource_credential.request_rejected actor_uid=%s error_type=%s",
+                peer_uid, type(exc).__name__,
+            )
             response = {"ok": False, "error": "Request rejected"}
         try:
             conn.sendall(json.dumps(response, separators=(",", ":")).encode("utf-8") + b"\n")
