@@ -16,13 +16,13 @@ These are transaction-level protections, not substitutes for database users with
 ## Security model
 
 - Agent submits a free-form SELECT, purpose, datasource ID and bind parameters.
-- API validates SQL through SQLGlot AST, applies datasource table allowlists and datasource-specific Agent allowlists, then stores a proposal.
+- API validates SQL through a pinned SQLGlot AST, rejects SQL comment carriers and ambiguous MySQL lexical forms, requires simple unquoted schema-qualified identifiers, applies datasource table allowlists and datasource-specific Agent allowlists, then stores a proposal.
 - A separate worker resolves credentials, verifies native read-only support, estimates query cost where safe, and calculates risk.
 - LOW risk auto-executes only if every gate passes. MEDIUM/HIGH requires a separate human reviewer.
-- Approval binds to the SQL + parameter hash, requester and expiry. The worker reparses, rechecks native read-only mode and replans before execution.
-- Results are streamed one row at a time and bounded by row count and response bytes (a single oversized database value may still be materialized by the driver). Exact scanned rows are reported only when an adapter has a true runtime metric.
+- Approval binds to the SQL + parameter hash, requester and expiry. The worker reparses, rechecks native read-only mode and replans before execution. Worker claims carry unique fencing tokens; every worker state transition and result publication is compare-and-swap against the active token/status, and proposal/audit transitions commit atomically.
+- Results are streamed one row at a time and bounded by row count and response bytes. MySQL connections are invalidated when a stream is truncated or fails so an unbuffered cursor cannot drain an unbounded remainder during cleanup. A single oversized database value may still be materialized by the driver. Duplicate result column names fail closed. Exact scanned rows are reported only when an adapter has a true runtime metric.
 - Before planning and again before execution, the worker resolves every allowlisted object against database catalogs and accepts only base tables; views, materialized views, foreign tables and Oracle synonyms fail closed.
-- Oracle applies a monotonic end-to-end time budget around execution and fetches, in addition to per-round-trip `call_timeout`.
+- Analysis connections use driver connection/read timeouts, pool acquisition timeouts and database-side statement timeouts; Oracle also uses per-round-trip `call_timeout`. Oracle user-query execution additionally applies a monotonic end-to-end time budget around execution and fetches.
 - Agent never receives DB URLs, usernames, passwords or secret references. MCP has no direct database connection.
 
 ## Quick start (local development only)
@@ -37,7 +37,7 @@ Python 3.11+.
 6. Start the worker separately with SAFEDB_DB_PATH, SAFEDB_DATASOURCES_FILE and only the datasource secrets it needs.
 7. Start MCP with SAFEDB_API_URL and the matching SAFEDB_AGENT_TOKEN.
 
-The MVP authenticator uses one Agent token and one reviewer token. Replace it with OIDC/OAuth JWT validation, audience/scope checks, per-Agent identity mapping and MFA-backed reviewer identity before remote or multi-user production use.
+The MVP authenticator uses one Agent token and one reviewer token. Non-ASCII Bearer tokens are compared as UTF-8 bytes and fail as ordinary 401 responses. Replace it with OIDC/OAuth JWT validation, audience/scope checks, per-Agent identity mapping and MFA-backed reviewer identity before remote or multi-user production use.
 
 ## Deployment boundary
 
