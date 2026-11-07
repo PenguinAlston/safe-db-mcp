@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import uuid
+from datetime import UTC, datetime
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ class ProposalStore:
                 proposal_id,
                 event["event_type"],
                 event.get("actor_id", "worker"),
-                event.get("created_at", "CURRENT_TIMESTAMP"),
+                event.get("created_at") or datetime.now(UTC).isoformat(),
                 json.dumps(event.get("details") or {}, default=str),
             ),
         )
