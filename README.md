@@ -35,7 +35,7 @@ MCP Server 是 API 客户端，不直接连接数据库。API 进程不得接收
 
 | 数据库 | 原生事务模式 | 查询规划 | 自动执行 |
 |---|---|---|---|
-| MySQL 8 | `START TRANSACTION READ ONLY`，并在服务器端验证 | `EXPLAIN FORMAT=JSON` | 仅当所有低风险门禁均通过时允许 |
+| MySQL 8 | `SET SESSION transaction_read_only=ON` 后 `START TRANSACTION`，并验证 `@@transaction_read_only=1` | `EXPLAIN FORMAT=JSON` | 仅当所有低风险门禁均通过时允许 |
 | PostgreSQL 16 | `SET TRANSACTION READ ONLY`，并在服务器端验证 | `EXPLAIN (FORMAT JSON)` | 仅当所有低风险门禁均通过时允许 |
 | Oracle 19c | 将 `SET TRANSACTION READ ONLY` 作为事务中的第一条语句 | 跳过，因为 `EXPLAIN PLAN` 会写入 `PLAN_TABLE` | 禁用；必须由人工审核 |
 
@@ -74,7 +74,8 @@ cp config/datasources.example.yaml config/datasources.yaml
 
 - `allowed_tables` 必须使用带 Schema 的表名（例如 `public.orders`）。
 - `allowed_agents` 仅列出确实获准使用该数据源的 Agent ID。
-- `sensitive_columns` 使用不带 Schema 的列名。
+- `sensitive_columns` 必须是列名字符串列表，例如 `[payment_token]`；数值限额必须是 YAML 整数，不接受布尔值、小数或数字字符串。
+- MySQL 仅接受 InnoDB 基表；PostgreSQL 拒绝分区父表、有继承子表的表，以及包含非 `pg_catalog` 基础类型列的表。
 - 在该数据源通过集成测试前，保持 `auto_execute: false`。
 - 使用权限范围尽可能小的数据库账号。
 
@@ -104,9 +105,6 @@ uvicorn safe_db_mcp.api:app --host 127.0.0.1 --port 8080
 终端 2 — Worker（从仅供 Worker 使用的密钥来源加载数据源 URL）：
 
 ```bash
-set -a
-source .env
-set +a
 export SAFEDB_DB_PATH=./data/safedb.sqlite3
 export SAFEDB_DATASOURCES_FILE=./config/datasources.yaml
 # 仅注入此 Worker 所需的数据源 URL，例如从 Vault
@@ -117,15 +115,15 @@ printf '\\n'
 python -m safe_db_mcp.worker
 ```
 
-API 和 MCP 终端使用的共享 `.env` 中不得包含数据库 URL。Worker Shell 只能接收它实际需要的数据源密钥。使用 Compose 时，插值文件中的值只会传递给 Worker 服务，因为 API 服务没有声明数据库 URL 环境变量。
+API 使用的 `.env` 中不得包含数据库 URL。Worker 不加载包含 Agent/Reviewer Token 的 `.env`，只注入存储路径、数据源配置及所需数据库密钥。使用 Compose 时，数据库 URL 只传递给 Worker 服务。
 
-终端 3 — MCP Server：
+终端 3 — MCP Server（使用未加载 API 或 Worker 密钥的新终端，不要 `source .env`）：
 
 ```bash
-set -a
-source .env
-set +a
 export SAFEDB_API_URL=http://127.0.0.1:8080
+read -r -s -p "Agent Token: " SAFEDB_AGENT_TOKEN
+export SAFEDB_AGENT_TOKEN
+printf '\\n'
 python -m safe_db_mcp.mcp_server
 ```
 
@@ -140,6 +138,8 @@ cp config/datasources.example.yaml config/datasources.yaml
 # 从密钥管理器将仅供 Worker 使用的数据库 URL 导出到当前 Shell，然后执行：
 docker compose up --build
 ```
+
+Linux 使用绑定挂载时，需预先创建 `data` 目录，并确保容器 UID/GID 10001 可写、其他非授权用户不可读写；否则 SQLite 无法初始化。不要通过将目录设为全员可写来绕过权限错误。
 
 Compose 将 API 端口绑定到 loopback 地址，并且不会把数据库 URL 环境变量传递给 API 服务。Worker 会接收数据源 URL 环境变量。生产环境应使用 Secret Manager/Vault 身份替代基于环境变量的密钥注入，并限制 Worker 的网络出口。Compose 和 SQLite 仅用于本地开发。
 
@@ -178,7 +178,7 @@ curl --fail-with-body \
   http://127.0.0.1:8080/v1/review/queue
 ```
 
-批准或拒绝提案时必须附上原因：
+批准或拒绝提案时必须附上原因和刚刚审核的队列项中的 `review_token`。风险重评后此版本令牌会更换；旧页面的决策返回 409，必须重新审核。队列支持 `?limit=100&offset=0` 分页，并清理过期待审记录：
 
 ```bash
 curl --fail-with-body \
@@ -186,7 +186,7 @@ curl --fail-with-body \
   -H "Authorization: Bearer $SAFEDB_REVIEWER_TOKEN" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/v1/queries/<proposal-id>/decision \
-  -d '{"approve": true, "reason": "已审核查询范围和业务目的"}'
+  -d '{"approve": true, "reason": "已审核查询范围和业务目的", "review_token": "<复制当前队列项中的32位review_token>"}'
 ```
 
 Worker 执行获准的查询后，提交该请求的 Agent 可以获取受限结果：
@@ -219,6 +219,10 @@ pytest -q
 ```
 
 CI 会在 Python 3.12 上运行这些命令。单元测试使用 Mock 和临时 SQLite 存储，不能证明真实数据库上的只读行为。
+
+真实数据库回归位于 `tests/test_database_integration.py`。在隔离的测试进程中注入 `SAFEDB_TEST_MYSQL_URL` / `SAFEDB_TEST_POSTGRES_URL` 后运行 `pytest tests/test_database_integration.py -q`；未配置的数据库会明确跳过。目录边界与高权限账号只读拒写测试另需一次性测试库的 `SAFEDB_TEST_MYSQL_ADMIN_URL` / `SAFEDB_TEST_POSTGRES_ADMIN_URL`，不能使用生产账号。PostgreSQL 测试对象在事务结束时回滚，MySQL 测试创建的唯一命名表在结束时删除。
+
+过滤扫描、重复扫描和无法可靠解读的执行计划不提供可自动执行的扫描估算，需人工审核。估算不是运行时扫描硬配额。Decimal 与非有限浮点数以字符串返回，避免精度丢失或生成无效 JSON。
 
 启用某个数据源前，必须针对一次性测试 Schema 运行该数据库专属的集成测试。至少应覆盖：
 

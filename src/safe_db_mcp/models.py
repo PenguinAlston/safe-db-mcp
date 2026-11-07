@@ -20,6 +20,7 @@ class PrepareQueryRequest(BaseModel):
 class DecisionRequest(BaseModel):
     approve: bool
     reason: str = Field(min_length=3, max_length=1000)
+    review_token: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
 class RiskAssessment(BaseModel):

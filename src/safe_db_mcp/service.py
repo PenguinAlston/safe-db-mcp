@@ -93,7 +93,13 @@ class QueryService:
                 proposal, "query.expired", status="EXPIRED", error_code="PROPOSAL_EXPIRED"
             )
             return
-        datasource = self.datasources[proposal["datasource_id"]]
+        datasource = self.datasources.get(proposal["datasource_id"])
+        if datasource is None:
+            self._block(proposal, "DATASOURCE_NOT_REGISTERED")
+            return
+        if proposal["requester_id"] not in datasource.allowed_agents:
+            self._block(proposal, "AGENT_DATASOURCE_PERMISSION_CHANGED")
+            return
         query = validate_sql(proposal["sql"], datasource, proposal["parameters"])
         if query.sql_hash != proposal["sql_hash"]:
             self._block(proposal, "QUERY_HASH_MISMATCH")
@@ -148,11 +154,17 @@ class QueryService:
         if (
             approval.get("decision") != "APPROVED"
             or approval.get("sql_hash") != proposal["sql_hash"]
+            or not proposal.get("review_token")
+            or not approval.get("review_token")
+            or approval["review_token"] != proposal["review_token"]
         ):
             self._block(proposal, "APPROVAL_BINDING_INVALID")
             return
 
-        datasource = self.datasources[proposal["datasource_id"]]
+        datasource = self.datasources.get(proposal["datasource_id"])
+        if datasource is None:
+            self._block(proposal, "DATASOURCE_NOT_REGISTERED")
+            return
         if proposal["requester_id"] not in datasource.allowed_agents:
             self._block(proposal, "AGENT_DATASOURCE_PERMISSION_CHANGED")
             return
@@ -172,6 +184,15 @@ class QueryService:
                 return
             plan = adapter.explain(proposal["sql"], proposal["parameters"])
             assessment = assess_risk(query, plan, datasource, True)
+            if (
+                plan.estimated_scan_rows is not None
+                and datasource.max_hard_scan_rows > 0
+                and plan.estimated_scan_rows > datasource.max_hard_scan_rows
+            ):
+                self._block(
+                    proposal, "HARD_SCAN_LIMIT_EXCEEDED", assessment.model_dump()
+                )
+                return
             old = proposal.get("risk") or {}
             risk_fields = (
                 "score", "level", "reasons", "estimated_scan_rows",
@@ -191,28 +212,20 @@ class QueryService:
                     approval_json=None,
                 )
                 return
-            if (
-                plan.estimated_scan_rows is not None
-                and datasource.max_hard_scan_rows > 0
-                and plan.estimated_scan_rows > datasource.max_hard_scan_rows
-            ):
-                self._block(
-                    proposal, "HARD_SCAN_LIMIT_EXCEEDED", assessment.model_dump()
-                )
-                return
-            # Recheck the fencing token immediately before issuing the user query.
-            if not self.store.owns_claim(
-                proposal["proposal_id"], proposal["claim_token"], proposal["status"]
-            ):
-                return
             self._execute(proposal, adapter, datasource, assessment)
         finally:
             adapter.close()
 
     def _execute(self, proposal, adapter, datasource, assessment):
+        # Planning may outlive the proposal or the claim in either execution path.
         if not self.store.owns_claim(
             proposal["proposal_id"], proposal.get("claim_token"), proposal["status"]
         ):
+            return
+        if datetime.fromisoformat(proposal["expires_at"]) <= now():
+            self._worker_update(
+                proposal, "query.expired", status="EXPIRED", error_code="PROPOSAL_EXPIRED"
+            )
             return
         result = adapter.execute_readonly(
             proposal["sql"], proposal["parameters"],
@@ -248,26 +261,16 @@ class QueryService:
         )
 
     def decide(
-        self, proposal: dict, approve: bool, reviewer_id: str, reason: str
+        self, proposal: dict, approve: bool, reviewer_id: str, reason: str, review_token: str
     ):
         if proposal["requester_id"] == reviewer_id:
             raise PermissionError("Requester cannot approve their own query")
         if proposal["status"] != "PENDING_APPROVAL":
             raise ValueError("Proposal is not awaiting approval")
+        if not review_token or review_token != proposal.get("review_token"):
+            raise ValueError("Proposal review token changed; reload and retry")
         if datetime.fromisoformat(proposal["expires_at"]) <= now():
-            expired_at = iso(now())
-            self.store.update(
-                proposal["proposal_id"],
-                expected_status="PENDING_APPROVAL",
-                audit_event={
-                    "event_type": "query.expired",
-                    "actor_id": "worker",
-                    "created_at": expired_at,
-                    "details": {"reason": "approval_requested_after_expiry"},
-                },
-                status="EXPIRED",
-                error_code="PROPOSAL_EXPIRED",
-            )
+            self.store.expire_pending_approvals()
             raise ValueError("Proposal has expired")
         approval = {
             "reviewer_id": reviewer_id,
@@ -275,6 +278,7 @@ class QueryService:
             "reason": reason,
             "decided_at": iso(now()),
             "sql_hash": proposal["sql_hash"],
+            "review_token": review_token,
         }
         changed = self.store.decide(
             proposal["proposal_id"],
@@ -305,6 +309,7 @@ class QueryService:
             "created_at": proposal["created_at"],
             "expires_at": proposal["expires_at"],
             "risk": proposal.get("risk"),
+            "review_token": proposal.get("review_token"),
             "approval": proposal.get("approval"),
             "error_code": proposal.get("error_code"),
             "result_summary": ({

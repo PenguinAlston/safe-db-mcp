@@ -18,6 +18,7 @@ def run_once(store: ProposalStore, service: QueryService) -> int:
     if lease_seconds < 1:
         raise ValueError("SAFEDB_WORKER_LEASE_SECONDS must be positive")
     store.recover_stale_claims(lease_seconds)
+    store.expire_pending_approvals()
     processed = 0
 
     for item in store.list_status("ANALYZING", limit=10):

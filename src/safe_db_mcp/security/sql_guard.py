@@ -7,7 +7,8 @@ from dataclasses import dataclass
 
 import sqlglot
 from sqlglot import exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, TokenError
+from sqlglot.tokens import TokenType
 
 from safe_db_mcp.config import DataSource, normalise_identifier
 
@@ -34,6 +35,20 @@ SAFE_FUNCTIONS = {
     "EXTRACT", "FLOOR", "LENGTH", "LOWER", "MAX", "MIN", "NULLIF",
     "ROUND", "SUBSTR", "SUBSTRING", "SUM", "TRIM", "UPPER",
 }
+SAFE_CAST_TYPES = {
+    exp.DataType.Type.BIGINT, exp.DataType.Type.BOOLEAN, exp.DataType.Type.CHAR,
+    exp.DataType.Type.DATE, exp.DataType.Type.DECIMAL, exp.DataType.Type.DOUBLE,
+    exp.DataType.Type.FLOAT, exp.DataType.Type.INT, exp.DataType.Type.SMALLINT,
+    exp.DataType.Type.TEXT, exp.DataType.Type.TIME, exp.DataType.Type.TIMESTAMP,
+    exp.DataType.Type.TIMESTAMPTZ, exp.DataType.Type.VARCHAR,
+}
+# SQLGlot's special parsers omit source positions for these exact node types.
+# Their original token spellings are checked separately before parsing.
+FUNCTIONS_WITHOUT_META = {
+    exp.Cast, exp.Ceil, exp.CurrentDate, exp.CurrentTimestamp,
+    exp.Extract, exp.Floor, exp.Substring, exp.Trim,
+}
+EXTRACT_FIELDS = {"YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND"}
 FORBIDDEN_NODE_NAMES = {
     "Insert", "Update", "Delete", "Merge", "Create", "Drop", "Alter",
     "Command", "Copy", "Grant", "Revoke", "Transaction", "Set", "Use",
@@ -83,14 +98,14 @@ def _reject_bind_markers_in_quoted_text(sql: str) -> None:
             i += 1
             continue
         if char == "$":
-            match = re.match(r"\$[A-Za-z_0-9]*\$", sql[i:])
+            match = re.match(r"\$\w*\$", sql[i:])
             if match:
                 delimiter = match.group(0)
                 end = sql.find(delimiter, i + len(delimiter))
                 if end < 0:
                     raise SQLRejected("Unterminated dollar-quoted SQL text")
                 inner = sql[i + len(delimiter):end]
-                if re.search(r"(?<!:):[A-Za-z_0-9]+", inner):
+                if re.search(r"(?<!:):\w+", inner):
                     raise SQLRejected(
                         "Bind markers inside quoted SQL text are disabled"
                     )
@@ -117,11 +132,65 @@ def _table_key(table: exp.Table, dialect: str) -> str:
     return normalise_identifier(f"{schema}.{name}")
 
 
-def _function_name(node: exp.Func) -> str:
-    name = node.sql_name()
-    if not name or name.upper() == "ANONYMOUS":
-        name = getattr(node, "name", "") or ""
-    return str(name).upper()
+def _reject_special_function_spellings(sql: str, dialect: str) -> None:
+    dialect_impl = sqlglot.Dialect.get_or_raise(dialect)
+    parser = dialect_impl.parser_class
+    tokens = dialect_impl.tokenize(sql)
+    for index, token in enumerate(tokens):
+        special_call = (
+            token.text.upper() in parser.FUNCTION_PARSERS
+            and index + 1 < len(tokens)
+            and tokens[index + 1].token_type == TokenType.L_PAREN
+        )
+        if special_call or token.token_type in parser.NO_PAREN_FUNCTIONS:
+            original = sql[token.start:token.end + 1]
+            if not re.fullmatch(r"[A-Za-z_]+", original) or original.upper() not in SAFE_FUNCTIONS:
+                raise SQLRejected("Function spelling is not allowlisted")
+
+
+def _reject_quoted_cast_targets(sql: str, dialect: str) -> None:
+    # SQLGlot canonicalises a quoted cast target (e.g. CAST(x AS "TEXT")) into the
+    # same built-in type enum as its unquoted form, so the AST cannot reveal that
+    # the original spelling was quoted. Scan the token stream instead: a quoted
+    # IDENTIFIER after "AS" inside a CAST body or after "::" is never allowlisted.
+    dialect_impl = sqlglot.Dialect.get_or_raise(dialect)
+    tokens = dialect_impl.tokenize(sql)
+    cast_body_depths: set[int] = set()
+    depth = 0
+    prev_is_cast = False
+    for index, token in enumerate(tokens):
+        ttype = token.token_type
+        if ttype == TokenType.L_PAREN:
+            depth += 1
+            if prev_is_cast:
+                cast_body_depths.add(depth)
+        elif ttype == TokenType.R_PAREN:
+            cast_body_depths.discard(depth)
+            depth -= 1
+        else:
+            quoted_target = (
+                index + 1 < len(tokens)
+                and (
+                    (ttype == TokenType.ALIAS and depth in cast_body_depths)
+                    or ttype == TokenType.DCOLON
+                )
+                and tokens[index + 1].token_type == TokenType.IDENTIFIER
+            )
+            if quoted_target:
+                raise SQLRejected("Cast target must be an allowlisted built-in scalar type")
+        prev_is_cast = token.text.upper() == "CAST"
+
+
+def _function_name(node: exp.Func, sql: str) -> str:
+    start, end = node.meta.get("start"), node.meta.get("end")
+    if start is not None or end is not None:
+        if type(start) is int and type(end) is int and 0 <= start <= end < len(sql):
+            original = sql[start:end + 1]
+            if re.fullmatch(r"[A-Za-z_]+", original):
+                return original.upper()
+        return ""
+    # Never trust a canonical name for an arbitrary node lacking source metadata.
+    return node.sql_name() if type(node) in FUNCTIONS_WITHOUT_META else ""
 
 
 def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> ValidatedQuery:
@@ -134,9 +203,13 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
     _reject_bind_markers_in_quoted_text(sql)
 
     try:
+        _reject_special_function_spellings(sql, datasource.dialect)
+        _reject_quoted_cast_targets(sql, datasource.dialect)
         parsed = sqlglot.parse(sql, read=datasource.dialect)
-    except ParseError as exc:
+    except (ParseError, TokenError) as exc:
         raise SQLRejected("SQL could not be parsed for the selected dialect") from exc
+    except SQLRejected:
+        raise
     except (ValueError, TypeError) as exc:
         raise SQLRejected("SQL parser failed closed") from exc
 
@@ -161,6 +234,15 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
     if any(isinstance(node, exp.CTE) for node in tree.walk()):
         raise SQLRejected("CTEs are disabled until scoped object resolution is implemented")
 
+    # Collect before walking projections: a bare relation name can expose its
+    # entire row, including sensitive fields, even inside CAST or other functions.
+    relation_names: set[str] = set()
+    for relation in tree.find_all(exp.Table, exp.Subquery):
+        if isinstance(relation, exp.Table):
+            relation_names.add(relation.name.casefold())
+        if relation.alias:
+            relation_names.add(relation.alias.casefold())
+
     forbidden = []
     tables: set[str] = set()
     columns: set[str] = set()
@@ -168,11 +250,38 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
     for node in tree.walk():
         if getattr(node, "comments", None):
             raise SQLRejected("SQL comments are disabled")
-        if type(node).__name__ in FORBIDDEN_NODE_NAMES:
+        extract_field = (
+            isinstance(node, exp.Var)
+            and type(node.parent) is exp.Extract
+            and node.arg_key == "this"
+            and node.name.upper() in EXTRACT_FIELDS
+        )
+        if type(node).__name__ in FORBIDDEN_NODE_NAMES and not extract_field:
             forbidden.append(type(node).__name__)
         for arg_name in FORBIDDEN_ARGS:
             if node.args.get(arg_name) is not None:
                 forbidden.append(f"{type(node).__name__}.{arg_name}")
+
+        if isinstance(node, exp.Dot) and node.find(exp.Func) is not None:
+            raise SQLRejected("Qualified function invocations are disabled")
+        if isinstance(node, exp.Operator):
+            raise SQLRejected("Explicit operator invocations are disabled")
+        if isinstance(node, exp.Cast):
+            target = node.args.get("to")
+            if (
+                not isinstance(target, exp.DataType)
+                or target.this not in SAFE_CAST_TYPES
+                or target.args.get("nested")
+                or target.args.get("kind")
+                or any(isinstance(child, exp.DataType) for child in target.iter_expressions())
+            ):
+                raise SQLRejected("Cast target must be an allowlisted built-in scalar type")
+        if isinstance(node, exp.TableAlias) and node.args.get("columns"):
+            raise SQLRejected("Relation column alias lists are disabled")
+        if isinstance(node, exp.LimitOptions) and (
+            node.args.get("with_ties") or node.args.get("percent")
+        ):
+            raise SQLRejected("FETCH WITH TIES and PERCENT are disabled")
 
         if isinstance(node, exp.Table):
             if node.catalog:
@@ -186,6 +295,8 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
             if isinstance(node.this, exp.Identifier) and node.this.args.get("quoted"):
                 raise SQLRejected("Quoted column identifiers are disabled")
             column_name = normalise_identifier(node.name)
+            if column_name in relation_names:
+                raise SQLRejected("Whole-row references are disabled")
             if column_name:
                 columns.add(column_name)
                 if column_name in datasource.sensitive_columns:
@@ -196,7 +307,7 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
             raise SQLRejected("Wildcard expressions are not allowed")
 
         if isinstance(node, exp.Func):
-            function_name = _function_name(node)
+            function_name = _function_name(node, sql)
             if function_name not in SAFE_FUNCTIONS:
                 raise SQLRejected(
                     f"Function is not allowlisted: {function_name or type(node).__name__}"
