@@ -255,7 +255,19 @@ class QueryService:
         if proposal["status"] != "PENDING_APPROVAL":
             raise ValueError("Proposal is not awaiting approval")
         if datetime.fromisoformat(proposal["expires_at"]) <= now():
-            self.store.update(proposal["proposal_id"], status="EXPIRED")
+            expired_at = iso(now())
+            self.store.update(
+                proposal["proposal_id"],
+                expected_status="PENDING_APPROVAL",
+                audit_event={
+                    "event_type": "query.expired",
+                    "actor_id": "worker",
+                    "created_at": expired_at,
+                    "details": {"reason": "approval_requested_after_expiry"},
+                },
+                status="EXPIRED",
+                error_code="PROPOSAL_EXPIRED",
+            )
             raise ValueError("Proposal has expired")
         approval = {
             "reviewer_id": reviewer_id,
