@@ -28,14 +28,15 @@ Native read-only transactions do not replace least-privilege DB users, SQL AST v
 
 1. Auth uses single-principal static bearer tokens for local development only. Replace with OIDC JWT validation, issuer/audience/scope checks, per-Agent principal mapping and MFA-backed reviewer auth.
 2. SQLite is not suitable for multi-replica workers. Move proposals and audit to PostgreSQL with atomic claim/locking semantics.
-3. Table-level allowlist only; implement column-level policies, row/tenant predicates and view dependency resolution.
+3. SQL table allowlists are additionally checked against database catalogs: only schema-qualified base tables are accepted. Views, materialized views, foreign tables and Oracle synonyms are rejected. Column-level policies, row/tenant predicates and result redaction remain outstanding.
 4. Add encrypted proposal/result storage, KMS-managed keys, retention/deletion, and an immutable external audit sink.
 5. Oracle row-scan estimates are unavailable; the planner is deliberately skipped to avoid PLAN_TABLE writes, so Oracle auto-execution stays disabled.
 6. Add SQLGlot fuzzing, differential parser tests, denial-of-service tests, database integration tests and container/network penetration tests.
-7. Add rate limits, per-principal quotas, bounded queue depth, cancellation and worker lease recovery.
+7. Add rate limits, per-principal quotas, bounded queue depth and active query cancellation. Worker claims now have a configurable stale-lease recovery timeout; configure it above the maximum analysis/execution duration.
 8. Add result redaction and prevent sensitive data from reaching the model.
 9. MySQL read-only transactions have engine-specific semantics including temporary tables; remove temporary-table creation privileges from the DB principal.
-10. Worker uses SQLAlchemy pooling; production must test rollback/reset behavior and session-variable hygiene for selected drivers.
+10. Worker uses SQLAlchemy pooling; production must test rollback/reset behavior and session-variable hygiene for selected drivers. Oracle `call_timeout` is per round-trip; the adapter additionally enforces a monotonic wall-clock budget around execute/fetch, but real Oracle integration tests are still required.
+11. Streaming result retrieval reduces batch buffering, but one oversized row/LOB may still be materialized by the driver before the byte cap is applied.
 
 ## Incident response
 
