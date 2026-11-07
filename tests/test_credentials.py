@@ -189,3 +189,19 @@ def test_candidate_validator_receives_datasource_and_is_required_before_rotation
         "pg", secret, datetime.now(UTC) + timedelta(hours=2)
     )
     assert calls == [("pg", secret)]
+
+
+
+def test_worker_ui_password_is_hashed_and_verifiable():
+    credentials = manager()
+    assert not credentials.ui_password_configured()
+    credentials.set_ui_password("local-dashboard-password")
+    assert credentials.ui_password_configured()
+    assert credentials.verify_ui_password("local-dashboard-password")
+    assert not credentials.verify_ui_password("wrong-password")
+
+
+@pytest.mark.parametrize("password", ["short", "", "x" * 1025])
+def test_worker_ui_password_requires_reasonable_length(password):
+    with pytest.raises(ValueError):
+        manager().set_ui_password(password)
