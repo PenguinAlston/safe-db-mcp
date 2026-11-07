@@ -136,3 +136,16 @@ def test_worker_ui_rate_limits_failed_login_attempts():
     assert client.post(
         "/api/login", headers=headers(), json={"password": "local-dashboard-password"}
     ).status_code == 429
+
+
+
+def test_password_rotation_revokes_existing_dashboard_sessions():
+    manager = make_manager()
+    manager.set_ui_password("first-dashboard-password")
+    client = TestClient(create_worker_ui_app(manager))
+    login(client, "first-dashboard-password")
+    assert client.get("/api/status", headers={"host": "127.0.0.1:8090"}).status_code == 200
+    manager.set_ui_password("second-dashboard-password")
+    response = client.get("/api/status", headers={"host": "127.0.0.1:8090"})
+    assert response.status_code == 401
+    assert login(client, "second-dashboard-password")
