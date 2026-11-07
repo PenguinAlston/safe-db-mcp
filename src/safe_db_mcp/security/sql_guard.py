@@ -83,14 +83,14 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
     if not isinstance(tree, allowed_roots):
         raise SQLRejected("Only SELECT queries are allowed")
 
+    # CTE name resolution is dialect- and scope-sensitive. Until the resolver
+    # maps every CTE reference and underlying base table safely, reject all CTEs.
+    if any(isinstance(node, exp.CTE) for node in tree.walk()):
+        raise SQLRejected("CTEs are disabled until scoped object resolution is implemented")
+
     forbidden = []
     tables: set[str] = set()
     columns: set[str] = set()
-    cte_names = {
-        normalise_identifier(cte.alias_or_name)
-        for cte in tree.find_all(exp.CTE)
-        if cte.alias_or_name
-    }
 
     for node in tree.walk():
         if type(node).__name__ in FORBIDDEN_NODE_NAMES:
@@ -102,9 +102,6 @@ def validate_sql(sql: str, datasource: DataSource, parameters: dict) -> Validate
         if isinstance(node, exp.Table):
             if node.catalog:
                 raise SQLRejected("Cross-catalog references are not allowed")
-            name = normalise_identifier(node.name)
-            if name in cte_names:
-                continue
             key = _table_key(node)
             if key not in datasource.allowed_tables:
                 raise SQLRejected(f"Table is not allowlisted: {key}")
