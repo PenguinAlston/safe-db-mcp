@@ -111,7 +111,9 @@ export SAFEDB_DB_PATH=./data/safedb.sqlite3
 export SAFEDB_DATASOURCES_FILE=./config/datasources.yaml
 # Inject only the datasource URLs this worker needs, for example from Vault
 # or a local secret manager. Do not add these values to the API's environment.
-export PG16_URL="$(your-secret-manager-command-for-PG16_URL)"
+read -r -s -p "PG16_URL: " PG16_URL
+export PG16_URL
+printf '\\n'
 python -m safe_db_mcp.worker
 ```
 
@@ -134,7 +136,8 @@ The MCP server uses stdio by default. Configure your MCP client to launch `pytho
 ```bash
 cp .env.example .env
 cp config/datasources.example.yaml config/datasources.yaml
-# Edit both local files. Put database URLs in the worker's protected environment.
+# Edit .env (Agent/reviewer settings only) and the datasource YAML.
+# Export worker-only DB URLs into this shell from your secret manager, then run:
 docker compose up --build
 ```
 
@@ -231,6 +234,8 @@ Before enabling a datasource, run database-specific integration tests against a 
 - [Agent and coding-assistant instructions](AGENTS.md)
 - [Architecture and proposal lifecycle](docs/ARCHITECTURE.md)
 - [Development and contribution guide](CONTRIBUTING.md)
+- [Operations and secret handling](docs/OPERATIONS.md)
+- [Database integration test matrix](docs/TESTING.md)
 - [Security policy and production checklist](SECURITY.md)
 
 ## Known production blockers
