@@ -8,7 +8,10 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 
-RUN useradd --create-home --uid 10001 appuser
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /run/safedb \
+    && chown appuser:appuser /run/safedb \
+    && chmod 0700 /run/safedb
 USER appuser
 
 EXPOSE 8080
