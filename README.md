@@ -150,10 +150,10 @@ API 地址为 `http://127.0.0.1:8080`。可通过 `/docs` 访问交互式 OpenAP
 提交查询时，请将数据源、表和列名替换为配置中实际存在的名称：
 
 ```bash
-curl --fail-with-body \\
-  -H "Authorization: Bearer $SAFEDB_AGENT_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  http://127.0.0.1:8080/v1/queries \\
+curl --fail-with-body \
+  -H "Authorization: Bearer $SAFEDB_AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/v1/queries \
   -d '{
     "datasource_id": "pg16",
     "sql": "SELECT id, created_at FROM public.orders WHERE id = :order_id LIMIT 10",
@@ -165,35 +165,35 @@ curl --fail-with-body \\
 API 会返回一个 proposal ID。Worker 会异步处理该提案。使用以下命令查询状态：
 
 ```bash
-curl --fail-with-body \\
-  -H "Authorization: Bearer $SAFEDB_AGENT_TOKEN" \\
+curl --fail-with-body \
+  -H "Authorization: Bearer $SAFEDB_AGENT_TOKEN" \
   http://127.0.0.1:8080/v1/queries/<proposal-id>
 ```
 
 如果提案进入 `PENDING_APPROVAL` 状态，则需要由独立的审核身份检查审核队列：
 
 ```bash
-curl --fail-with-body \\
-  -H "Authorization: Bearer $SAFEDB_REVIEWER_TOKEN" \\
+curl --fail-with-body \
+  -H "Authorization: Bearer $SAFEDB_REVIEWER_TOKEN" \
   http://127.0.0.1:8080/v1/review/queue
 ```
 
 批准或拒绝提案时必须附上原因：
 
 ```bash
-curl --fail-with-body \\
-  -X POST \\
-  -H "Authorization: Bearer $SAFEDB_REVIEWER_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  http://127.0.0.1:8080/v1/queries/<proposal-id>/decision \\
+curl --fail-with-body \
+  -X POST \
+  -H "Authorization: Bearer $SAFEDB_REVIEWER_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/v1/queries/<proposal-id>/decision \
   -d '{"approve": true, "reason": "已审核查询范围和业务目的"}'
 ```
 
 Worker 执行获准的查询后，提交该请求的 Agent 可以获取受限结果：
 
 ```bash
-curl --fail-with-body \\
-  -H "Authorization: Bearer $SAFEDB_AGENT_TOKEN" \\
+curl --fail-with-body \
+  -H "Authorization: Bearer $SAFEDB_AGENT_TOKEN" \
   http://127.0.0.1:8080/v1/queries/<proposal-id>/result
 ```
 
