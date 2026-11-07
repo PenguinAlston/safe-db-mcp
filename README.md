@@ -123,7 +123,7 @@ set +a
 uvicorn safe_db_mcp.api:app --host 127.0.0.1 --port 8080
 ```
 
-终端 2 — Worker（不注入数据库 URL；启动后通过本机 Socket 接收人工凭证）：
+终端 2 — Worker（不注入数据库 URL；启动本机管理面板和 Socket）：
 
 ```bash
 export SAFEDB_DB_PATH=./data/safedb.sqlite3
@@ -131,6 +131,14 @@ export SAFEDB_DATASOURCES_FILE=./config/datasources.yaml
 # local_manual 模式不需要数据库 URL 环境变量
 python -m safe_db_mcp.worker
 ```
+
+终端 4 — 首次设置本机管理面板密码（同 Worker OS 用户）：
+
+```bash
+python -m safe_db_mcp.credentials ui-password set
+```
+
+然后浏览器访问 `http://127.0.0.1:8090`。管理面板默认仅监听 loopback。
 
 API 使用的 `.env` 中不得包含数据库 URL。Worker 不加载包含 Agent/Reviewer Token 的 `.env`，只注入存储路径和数据源配置。堡垒机临时连接串通过 Worker 本地凭证 CLI 录入。
 
@@ -154,8 +162,10 @@ cp config/datasources.example.yaml config/datasources.yaml
 # 编辑 .env（仅包含 Agent/审核配置）和数据源 YAML。
 # 启动 API 和 Worker；先不要向任何容器注入数据库 URL
 docker compose up --build -d
-# 在 Worker 容器内录入临时 DSN
-docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 420
+# 设置 Worker 本地管理面板密码
+docker compose exec worker python -m safe_db_mcp.credentials ui-password set
+
+# 然后浏览器访问 http://127.0.0.1:8090，登录后录入 pg16 临时连接串
 ```
 
 Linux 使用绑定挂载时，需预先创建 `data` 目录，并确保容器 UID/GID 10001 可写、其他非授权用户不可读写；否则 SQLite 无法初始化。不要通过将目录设为全员可写来绕过权限错误。Worker 的 `worker-run` 命名卷由镜像预设为 UID 10001 的私有目录。
