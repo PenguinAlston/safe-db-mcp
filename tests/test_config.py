@@ -164,10 +164,11 @@ def test_manual_credential_source_rejects_url_env(tmp_path):
 @pytest.mark.parametrize("ttl", [0, -1, 481, "480", "true"])
 def test_manual_credential_ttl_is_strict_and_bounded(tmp_path, ttl):
     config = tmp_path / "datasources.yaml"
+    ttl_value = f'"{ttl}"' if isinstance(ttl, str) else str(ttl)
     config.write_text(
         "datasources:\n  pg:\n    dialect: postgres\n"
         "    credential_source:\n      type: local_manual\n"
-        "      max_ttl_minutes: " + str(ttl) + "\n"
+        "      max_ttl_minutes: " + ttl_value + "\n"
         "    readonly_mode: postgres_transaction\n"
         "    allowed_agents: [agent]\n"
         "    allowed_tables: [public.orders]\n",
