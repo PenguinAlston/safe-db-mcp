@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy.engine import make_url
 
@@ -50,9 +50,11 @@ class InMemoryCredentialManager:
         self,
         datasources: dict[str, DataSource],
         expiring_window: timedelta = timedelta(minutes=30),
+        validator: Callable[[DataSource, str], bool] | None = None,
     ):
         self._datasources = datasources
         self._expiring_window = expiring_window
+        self._validator = validator
         self._records: dict[str, _Credential] = {}
         self._lock = threading.RLock()
 
@@ -115,6 +117,15 @@ class InMemoryCredentialManager:
             raise ValueError("Credential expiry must be in the future")
         if remaining > max_seconds + 60:
             raise ValueError("Credential expiry exceeds the datasource TTL limit")
+
+        # Validate before replacing the active credential. A broken or unreachable
+        # new DSN must never evict the previous still-valid credential.
+        if self._validator is not None:
+            try:
+                if self._validator(datasource, database_url) is not True:
+                    raise ValueError("Credential validation failed")
+            except Exception:
+                raise ValueError("Credential validation failed") from None
 
         with self._lock:
             previous = self._records.get(datasource_id)
@@ -228,6 +239,26 @@ class InMemoryCredentialManager:
                 if self._refresh_locked(datasource_id, now):
                     changed.append(self._status_locked(datasource_id, now))
         return changed
+
+
+def validate_database_credential(datasource: DataSource, database_url: str) -> bool:
+    """Verify a candidate DSN before it can replace the active local credential."""
+
+    class CandidateProvider:
+        def get_url(self, datasource_id: str) -> str:
+            if datasource_id != datasource.datasource_id:
+                raise CredentialUnavailable("Datasource mismatch")
+            return database_url
+
+    from safe_db_mcp.adapters.factory import create_adapter
+
+    adapter = create_adapter(datasource, CandidateProvider())
+    try:
+        if not adapter.verify_readonly():
+            return False
+        return adapter.verify_allowed_tables(tuple(sorted(datasource.allowed_tables)))
+    finally:
+        adapter.close()
 
 
 class CredentialSocketServer:
@@ -393,7 +424,8 @@ class CredentialSocketClient:
         if len(data) > _MAX_MESSAGE_BYTES:
             raise RuntimeError("Credential request exceeds the size limit")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(5)
+            # Credential replacement performs bounded DB read-only/catalog checks.
+            client.settimeout(30)
             client.connect(self.socket_path)
             client.sendall(data)
             response = bytearray()
