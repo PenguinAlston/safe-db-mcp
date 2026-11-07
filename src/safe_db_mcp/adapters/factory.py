@@ -8,7 +8,7 @@ class AdapterUnavailable(RuntimeError):
     pass
 
 
-def create_adapter(datasource: DataSource):
+def create_adapter(datasource: DataSource, credential_provider=None):
     expected_modes = {
         "postgres": "postgres_transaction",
         "mysql": "mysql_transaction",
@@ -26,6 +26,6 @@ def create_adapter(datasource: DataSource):
         )
     return SQLAlchemyReadOnlyAdapter(
         datasource.dialect,
-        datasource.database_url(),
+        datasource.database_url(credential_provider),
         datasource.timeout_ms,
     )
