@@ -250,7 +250,7 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                     driver.call_timeout = min(
                         timeout_ms, max(1, int((deadline - time.monotonic()) * 1000))
                     )
-                result = conn.execute(text(sql), parameters)
+                result = conn.execution_options(stream_results=True).execute(text(sql), parameters)
                 columns = list(result.keys())
                 while len(rows_out) < max_rows + 1:
                     remaining = deadline - time.monotonic()
@@ -262,9 +262,8 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
                         conn.connection.driver_connection.call_timeout = min(
                             timeout_ms, max(1, int(remaining * 1000))
                         )
-                    batch = result.fetchmany(
-                        min(100, max_rows + 1 - len(rows_out))
-                    )
+                    # Stream one row at a time to reduce pre-budget buffering.
+                    batch = result.fetchmany(1)
                     if not batch:
                         break
                     for row in batch:
