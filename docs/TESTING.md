@@ -2,11 +2,11 @@
 
 ## 快速本地检查
 
-\`\`\`bash
+```bash
 pip install -e ".[dev]"
 ruff check src tests
 pytest -q
-\`\`\`
+```
 
 GitHub Actions 工作流会在 Python 3.12 上运行 lint 和单元测试命令。
 
@@ -22,11 +22,11 @@ GitHub Actions 工作流会在 Python 3.12 上运行 lint 和单元测试命令�
 
 | 测试领域 | MySQL 8 / PyMySQL | PostgreSQL 16 / psycopg | Oracle 19c / python-oracledb |
 |---|---|---|---|
-| 启用原生只读模式 | 验证服务器上的事务模式 | 验证服务器上的事务模式 | 验证第一条语句必须为 \`SET TRANSACTION READ ONLY\` |
+| 启用原生只读模式 | 验证服务器上的事务模式 | 验证服务器上的事务模式 | 验证第一条语句必须为 `SET TRANSACTION READ ONLY` |
 | 拒绝 DML / DDL | 测试普通表及临时表例外 | 测试拒绝 DML 和 DDL | 测试拒绝 DML 和 DDL |
 | 数据库对象目录 | 区分基表、视图和临时表 | 区分 relkind 中的表/分区与视图/外部表 | 区分表、视图、同义词和外部表 |
-| 超时 | 语句超时、读取超时、连接池等待 | 语句超时、连接超时、连接池等待 | \`call_timeout\`、连接超时、单调时钟执行/获取截止时间 |
-| 连接卫生 | 回滚、重置 \`max_execution_time\`、使未完成的 SSCursor 失效 | 回滚、事务级 \`statement_timeout\` 清理 | 回滚、重置 \`call_timeout\`、取消操作 |
+| 超时 | 语句超时、读取超时、连接池等待 | 语句超时、连接超时、连接池等待 | `call_timeout`、连接超时、单调时钟执行/获取截止时间 |
+| 连接卫生 | 回滚、重置 `max_execution_time`、使未完成的 SSCursor 失效 | 回滚、事务级 `statement_timeout` 清理 | 回滚、重置 `call_timeout`、取消操作 |
 | 结果限制 | 行数/字节数上限，以及流中断后的清理 | 行数/字节数上限，以及流中断后的清理 | 行数/字节数上限，以及流中断后的清理 |
 | 连接池复用 | 成功/失败/截断后运行安全查询 | 成功/失败后运行安全查询 | 成功/失败/取消后运行安全查询 |
 
@@ -34,11 +34,11 @@ GitHub Actions 工作流会在 Python 3.12 上运行 lint 和单元测试命令�
 
 针对每种数据库方言，都应验证以下输入会采取 fail-closed（默认拒绝）行为：
 
-- 多条语句、DML/DDL、\`SELECT INTO\`、\`FOR UPDATE\`、锁定子句以及禁止的命令节点。
-- SQL 注释及方言特有的注释载体，尤其是 MySQL 可执行注释和 \`--1\`。
+- 多条语句、DML/DDL、`SELECT INTO`、`FOR UPDATE`、锁定子句以及禁止的命令节点。
+- SQL 注释及方言特有的注释载体，尤其是 MySQL 可执行注释和 `--1`。
 - 带引号或有歧义的标识符、Schema/跨目录引用，以及未获批准的对象名。
 - 不支持的函数、通配符投影、尚未实现安全名称解析前的 CTE，以及有副作用的数据库功能。
-- 位于带引号字符串形式内部、但可能被 SQLAlchemy 的 \`text()\` 解析器重新解释为绑定标记的 token。
+- 位于带引号字符串形式内部、但可能被 SQLAlchemy 的 `text()` 解析器重新解释为绑定标记的 token。
 - 临时对象，以及数据库原生只读事务的特定例外。
 
 ## 并发与生命周期测试
@@ -51,4 +51,4 @@ GitHub Actions 工作流会在 Python 3.12 上运行 lint 和单元测试命令�
 
 ## 启用数据源前必须保留的证据
 
-记录数据库服务器版本、SQLAlchemy 版本、驱动版本、测试 Schema、使用的授权、执行的命令/测试用例、通过/失败结果，以及剩余的驱动限制。不能根据 Mock 测试或一次成功的 \`SELECT 1\` 就推断真实数据库环境是安全的。
+记录数据库服务器版本、SQLAlchemy 版本、驱动版本、测试 Schema、使用的授权、执行的命令/测试用例、通过/失败结果，以及剩余的驱动限制。不能根据 Mock 测试或一次成功的 `SELECT 1` 就推断真实数据库环境是安全的。
