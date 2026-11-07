@@ -99,7 +99,7 @@ docker compose exec worker python -m safe_db_mcp.credentials set pg16 --expires-
 docker compose exec worker python -m safe_db_mcp.credentials clear pg16
 ```
 
-CLI 使用无回显输入并要求再次确认。连接串通过 Worker 专属的本地 Unix Socket 送入 Worker 进程内存，不经过云端 API/MCP，不写入 YAML、环境变量或持久化数据库。只有与 Worker 进程相同的操作系统用户可以访问 Socket。默认采用纯内存存储：Worker 重启后需重新录入凭证。到期后 Worker 清除内存中的凭证并暂停该数据源的新任务；凭证缺失时任务保持原状态排队，不会被当成查询失败处理；但提案仍受默认 15 分钟自身有效期约束，过期后会按正常提案生命周期失效。到期前 30 分钟进入 `EXPIRING` 状态并写入不含秘密的日志。
+CLI 使用无回显输入并要求再次确认。连接串通过 Worker 专属的本地 Unix Socket 送入 Worker 进程内存，不经过云端 API/MCP，不写入 YAML、环境变量或持久化数据库。Worker 会先使用候选连接串验证数据库原生只读能力和配置表目录，成功后才替换当前凭证；验证失败不会覆盖旧凭证。只有与 Worker 进程相同的操作系统用户可以访问 Socket。默认采用纯内存存储：Worker 重启后需重新录入凭证。到期后 Worker 清除内存中的凭证并暂停该数据源的新任务；凭证缺失时任务保持原状态排队，不会被当成查询失败处理；但提案仍受默认 15 分钟自身有效期约束，过期后会按正常提案生命周期失效。到期前 30 分钟进入 `EXPIRING` 状态并写入不含秘密的日志。
 
 **连接串兼容性前置检查：** 必须从运行 Worker 的实际主机验证堡垒机连接串可用。如果它依赖操作者电脑上的 localhost SSH 隧道、个人 IP 或桌面会话，不能直接复制到另一台服务器使用。
 
