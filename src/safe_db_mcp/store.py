@@ -39,7 +39,8 @@ class ProposalStore:
                 risk_json TEXT,
                 approval_json TEXT,
                 result_json TEXT,
-                error_code TEXT
+                error_code TEXT,
+                claimed_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_proposals_status
                 ON proposals(status, created_at);
@@ -52,7 +53,15 @@ class ProposalStore:
                 details_json TEXT NOT NULL
             );
             """)
-
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(proposals)").fetchall()
+            }
+            if "claimed_at" not in columns:
+                conn.execute("ALTER TABLE proposals ADD COLUMN claimed_at TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_proposals_claimed_at "
+                "ON proposals(status, claimed_at)"
+            )
     def create(self, proposal: dict[str, Any]):
         with closing(self._connect()) as conn:
             conn.execute(
@@ -88,7 +97,8 @@ class ProposalStore:
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
             cur = conn.execute(
-                "UPDATE proposals SET status=? WHERE proposal_id=? AND status=?",
+                "UPDATE proposals SET status=?, claimed_at=CURRENT_TIMESTAMP "
+                "WHERE proposal_id=? AND status=?",
                 (claimed, proposal_id, expected),
             )
             conn.commit()
@@ -100,6 +110,8 @@ class ProposalStore:
             raise ValueError("Unsupported proposal update field")
         if not fields:
             return
+        if "status" in fields and fields["status"] not in {"ANALYZING_WORKER", "EXECUTING"}:
+            fields["claimed_at"] = None
         assignments = ", ".join(f"{key}=?" for key in fields)
         values = []
         for key, value in fields.items():
@@ -113,6 +125,25 @@ class ProposalStore:
                 f"UPDATE proposals SET {assignments} WHERE proposal_id=?", values
             )
 
+    def recover_stale_claims(self, lease_seconds: int = 600) -> int:
+        """Requeue work abandoned by a crashed worker after its lease expires."""
+        if lease_seconds < 1:
+            raise ValueError("lease_seconds must be positive")
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                """UPDATE proposals
+                   SET status=CASE status
+                       WHEN 'ANALYZING_WORKER' THEN 'ANALYZING'
+                       WHEN 'EXECUTING' THEN 'APPROVED'
+                   END,
+                   claimed_at=NULL
+                   WHERE status IN ('ANALYZING_WORKER', 'EXECUTING')
+                     AND claimed_at < datetime('now', ?)""",
+                (f"-{lease_seconds} seconds",),
+            )
+            conn.commit()
+            return cur.rowcount
     def decide(self, proposal_id: str, expected: str, status: str, approval: dict):
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
