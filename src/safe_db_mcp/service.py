@@ -23,9 +23,36 @@ class QueryService:
         self.store = store
         self.datasources = datasources
 
+    def _worker_update(
+        self,
+        proposal: dict,
+        event_type: str,
+        details: dict[str, Any] | None = None,
+        **fields,
+    ) -> bool:
+        token = proposal.get("claim_token")
+        if not token:
+            return False
+        return self.store.update(
+            proposal["proposal_id"],
+            expected_claim_token=token,
+            expected_status=proposal["status"],
+            audit_event={
+                "event_type": event_type,
+                "actor_id": "worker",
+                "created_at": iso(now()),
+                "details": details or {},
+            },
+            **fields,
+        )
+
     def prepare(
-        self, datasource_id: str, sql: str, purpose: str,
-        parameters: dict[str, Any], requester_id: str
+        self,
+        datasource_id: str,
+        sql: str,
+        purpose: str,
+        parameters: dict[str, Any],
+        requester_id: str,
     ) -> dict:
         datasource = self.datasources.get(datasource_id)
         if datasource is None:
@@ -46,19 +73,25 @@ class QueryService:
             "created_at": iso(created),
             "expires_at": iso(created + timedelta(minutes=15)),
         }
-        self.store.create(proposal)
-        self.store.audit(
-            proposal["proposal_id"], "query.submitted", requester_id,
-            proposal["created_at"], {
-                "datasource_id": datasource_id,
-                "sql_hash": query.sql_hash,
+        self.store.create(
+            proposal,
+            audit_event={
+                "event_type": "query.submitted",
+                "actor_id": requester_id,
+                "created_at": proposal["created_at"],
+                "details": {
+                    "datasource_id": datasource_id,
+                    "sql_hash": query.sql_hash,
+                },
             },
         )
         return self.public_view(self.store.get(proposal["proposal_id"]))
 
     def process_analysis(self, proposal: dict) -> None:
         if datetime.fromisoformat(proposal["expires_at"]) <= now():
-            self.store.update(proposal["proposal_id"], status="EXPIRED")
+            self._worker_update(
+                proposal, "query.expired", status="EXPIRED", error_code="PROPOSAL_EXPIRED"
+            )
             return
         datasource = self.datasources[proposal["datasource_id"]]
         query = validate_sql(proposal["sql"], datasource, proposal["parameters"])
@@ -92,24 +125,24 @@ class QueryService:
                 self._execute(proposal, adapter, datasource, assessment)
                 return
 
-            self.store.update(
-                proposal["proposal_id"],
-                status="PENDING_APPROVAL",
-                risk_json=assessment.model_dump(),
-            )
-            self.store.audit(
-                proposal["proposal_id"], "query.pending_approval", "worker",
-                iso(now()), {
+            self._worker_update(
+                proposal,
+                "query.pending_approval",
+                {
                     "risk_level": assessment.level,
                     "risk_score": assessment.score,
                 },
+                status="PENDING_APPROVAL",
+                risk_json=assessment.model_dump(),
             )
         finally:
             adapter.close()
 
     def process_execution(self, proposal: dict) -> None:
         if datetime.fromisoformat(proposal["expires_at"]) <= now():
-            self.store.update(proposal["proposal_id"], status="EXPIRED")
+            self._worker_update(
+                proposal, "query.expired", status="EXPIRED", error_code="PROPOSAL_EXPIRED"
+            )
             return
         approval = proposal.get("approval") or {}
         if (
@@ -140,7 +173,6 @@ class QueryService:
             plan = adapter.explain(proposal["sql"], proposal["parameters"])
             assessment = assess_risk(query, plan, datasource, True)
             old = proposal.get("risk") or {}
-            # Approval is bound to the planner/risk snapshot, not only the SQL hash.
             risk_fields = (
                 "score", "level", "reasons", "estimated_scan_rows",
                 "estimated_result_rows",
@@ -150,15 +182,13 @@ class QueryService:
                 for field in risk_fields
             )
             if risk_changed:
-                self.store.update(
-                    proposal["proposal_id"],
+                self._worker_update(
+                    proposal,
+                    "query.approval_invalidated",
+                    {"new_risk_level": assessment.level},
                     status="PENDING_APPROVAL",
                     risk_json=assessment.model_dump(),
                     approval_json=None,
-                )
-                self.store.audit(
-                    proposal["proposal_id"], "query.risk_increased", "worker",
-                    iso(now()), {"new_risk_level": assessment.level},
                 )
                 return
             if (
@@ -170,40 +200,51 @@ class QueryService:
                     proposal, "HARD_SCAN_LIMIT_EXCEEDED", assessment.model_dump()
                 )
                 return
+            # Recheck the fencing token immediately before issuing the user query.
+            if not self.store.owns_claim(
+                proposal["proposal_id"], proposal["claim_token"], proposal["status"]
+            ):
+                return
             self._execute(proposal, adapter, datasource, assessment)
         finally:
             adapter.close()
 
     def _execute(self, proposal, adapter, datasource, assessment):
+        if not self.store.owns_claim(
+            proposal["proposal_id"], proposal.get("claim_token"), proposal["status"]
+        ):
+            return
         result = adapter.execute_readonly(
             proposal["sql"], proposal["parameters"],
             datasource.max_result_rows, datasource.max_result_bytes,
             datasource.timeout_ms,
         )
-        self.store.update(
-            proposal["proposal_id"],
-            status="SUCCEEDED",
-            risk_json=assessment.model_dump(),
-            result_json=result,
-            error_code=None,
-        )
-        self.store.audit(
-            proposal["proposal_id"], "query.succeeded", "worker", iso(now()), {
+        # Completion is a compare-and-swap against this exact worker's claim.
+        # A reclaimed worker cannot publish data or overwrite approval state.
+        self._worker_update(
+            proposal,
+            "query.succeeded",
+            {
                 "returned_rows": result["returned_rows"],
                 "result_bytes": result["result_bytes"],
                 "duration_ms": result["duration_ms"],
                 "scanned_rows": result["scanned_rows"],
             },
+            status="SUCCEEDED",
+            risk_json=assessment.model_dump(),
+            result_json=result,
+            error_code=None,
         )
 
     def _block(self, proposal, code: str, risk: dict | None = None):
         fields = {"status": "BLOCKED", "error_code": code}
         if risk is not None:
             fields["risk_json"] = risk
-        self.store.update(proposal["proposal_id"], **fields)
-        self.store.audit(
-            proposal["proposal_id"], "query.blocked", "worker", iso(now()),
+        self._worker_update(
+            proposal,
+            "query.blocked",
             {"error_code": code},
+            **fields,
         )
 
     def decide(
@@ -224,18 +265,22 @@ class QueryService:
             "sql_hash": proposal["sql_hash"],
         }
         changed = self.store.decide(
-            proposal["proposal_id"], "PENDING_APPROVAL",
-            "APPROVED" if approve else "REJECTED", approval,
+            proposal["proposal_id"],
+            "PENDING_APPROVAL",
+            "APPROVED" if approve else "REJECTED",
+            approval,
+            audit_event={
+                "event_type": "query.approval_decision",
+                "actor_id": reviewer_id,
+                "created_at": approval["decided_at"],
+                "details": {
+                    "decision": approval["decision"],
+                    "sql_hash": proposal["sql_hash"],
+                },
+            },
         )
         if not changed:
             raise ValueError("Proposal state changed; reload and retry")
-        self.store.audit(
-            proposal["proposal_id"], "query.approval_decision", reviewer_id,
-            approval["decided_at"], {
-                "decision": approval["decision"],
-                "sql_hash": proposal["sql_hash"],
-            },
-        )
         return self.public_view(self.store.get(proposal["proposal_id"]))
 
     def public_view(self, proposal: dict | None) -> dict:
