@@ -10,11 +10,11 @@
 
 ## 验证情况
 
-- [ ] \`ruff check src tests\`
-- [ ] \`pytest -q\`
+- [ ] `ruff check src tests`
+- [ ] `pytest -q`
 - [ ] 已新增/更新安全回归测试
 - [ ] 已运行真实数据库集成测试（列出数据库引擎/服务器及驱动版本）；或者明确说明未运行
-- [ ] 已更新文档（\`README.md\`、\`SECURITY.md\`、\`AGENTS.md\` 及相关文档）
+- [ ] 已更新文档（`README.md`、`SECURITY.md`、`AGENTS.md` 及相关文档）
 
 ## 密钥与数据卫生
 
