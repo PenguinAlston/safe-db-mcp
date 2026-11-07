@@ -1,4 +1,7 @@
+from dataclasses import replace
+
 import pytest
+from sqlalchemy import text
 
 from safe_db_mcp.config import DataSource
 from safe_db_mcp.security.sql_guard import SQLRejected, validate_sql
@@ -152,3 +155,154 @@ def test_fetch_first_is_recognised_as_top_level_limit(datasource):
     )
     assert result.has_top_level_limit is True
     assert result.limit_value == 5
+
+
+@pytest.mark.parametrize("expression", [
+    "private.lower(id)",
+    "public.lower(id)",
+    '"private".lower(id)',
+    '"LOWER"(id)',
+    '"lower"(id)',
+    "LCASE(id)",
+    "UCASE(id)",
+    '"CEIL"(id)',
+    '"CAST"(id AS TEXT)',
+    '"EXTRACT"(YEAR FROM id)',
+    '"TRIM"(id)',
+    '"SUBSTRING"(id, 1)',
+    "CONVERT(id, TEXT)",
+    "DATE_PART('year', id)",
+])
+def test_function_identity_cannot_be_canonicalised_into_allowlist(datasource, expression):
+    with pytest.raises(SQLRejected, match="[Ff]unction"):
+        validate_sql(f"SELECT {expression} FROM public.orders LIMIT 5", datasource, {})
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "mysql", "oracle"])
+@pytest.mark.parametrize("expression", [
+    "lower(id)",
+    "CEIL(id)",
+    "CEILING(id)",
+    "FLOOR(id)",
+    "SUBSTR(id, 1, 2)",
+    "SUBSTRING(id, 1, 2)",
+    "TRIM(id)",
+    "CAST(id AS INTEGER)",
+    "EXTRACT(YEAR FROM created_at)",
+    "CURRENT_DATE",
+    "CURRENT_TIMESTAMP",
+])
+def test_existing_unquoted_safe_functions_remain_valid(datasource, dialect, expression):
+    result = validate_sql(
+        f"SELECT {expression} FROM public.orders",
+        replace(datasource, dialect=dialect),
+        {},
+    )
+    assert result.tables == ("public.orders",)
+
+
+@pytest.mark.parametrize("expression", [
+    "id OPERATOR(private.+) 1",
+    "id OPERATOR(pg_catalog.+) 1",
+])
+def test_explicit_operator_invocations_are_rejected(datasource, expression):
+    with pytest.raises(SQLRejected, match="[Oo]perator"):
+        validate_sql(f"SELECT {expression} FROM public.orders", datasource, {})
+
+
+@pytest.mark.parametrize("target", [
+    "private.custom_type", "custom_domain", "public.orders", "RECORD",
+    "INTEGER[]", "TEXT[][]", "STRUCT<id INTEGER>", "MAP<INT, TEXT>",
+])
+def test_non_scalar_or_custom_cast_targets_are_rejected(datasource, target):
+    with pytest.raises(SQLRejected, match="[Cc]ast"):
+        validate_sql(f"SELECT CAST(id AS {target}) FROM public.orders", datasource, {})
+
+
+@pytest.mark.parametrize("expression", [
+    'CAST(id AS "TEXT")', 'id::"TEXT"', 'CAST(id AS "integer")',
+    'CAST(COALESCE(id, 1) AS "TEXT")',
+])
+def test_quoted_cast_targets_cannot_be_canonicalised(datasource, expression):
+    with pytest.raises(SQLRejected, match="[Cc]ast"):
+        validate_sql(f"SELECT {expression} FROM public.orders", datasource, {})
+
+
+@pytest.mark.parametrize("target", ["INTEGER", "TEXT", "DECIMAL", "DECIMAL(10, 2)"])
+def test_builtin_scalar_cast_targets_remain_valid(datasource, target):
+    result = validate_sql(f"SELECT CAST(id AS {target}) FROM public.orders", datasource, {})
+    assert result.columns == ("id",)
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT c.renamed FROM public.customers AS c(id, renamed)",
+    "SELECT c.renamed FROM (SELECT id FROM public.orders) AS c(renamed)",
+])
+def test_relation_column_alias_lists_are_rejected(datasource, sql):
+    with pytest.raises(SQLRejected, match="[Aa]lias"):
+        validate_sql(sql, datasource, {})
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT c FROM public.orders AS c",
+    "SELECT CAST(c AS TEXT) FROM public.orders AS c",
+    "SELECT orders FROM public.orders",
+    "SELECT public.orders FROM public.orders",
+    "SELECT c FROM (SELECT id FROM public.orders) AS c",
+    "SELECT CAST(c AS TEXT) FROM (SELECT id FROM public.orders) AS c",
+    "SELECT C FROM public.orders AS c",
+    "SELECT c FROM public.orders AS \"c\"",
+])
+def test_whole_row_references_are_rejected(datasource, sql):
+    with pytest.raises(SQLRejected, match="[Ww]hole.row"):
+        validate_sql(sql, datasource, {})
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT c.id FROM public.orders c",
+    "SELECT public.orders.id FROM public.orders",
+    "SELECT c.id FROM (SELECT id FROM public.orders) c",
+])
+def test_qualified_column_references_remain_valid(datasource, sql):
+    assert validate_sql(sql, datasource, {}).columns == ("id",)
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT c.email FROM public.customers AS c",
+    "SELECT LOWER(c.email) FROM public.customers AS c",
+])
+def test_direct_sensitive_columns_stay_blocked_with_aliases(datasource, sql):
+    with pytest.raises(SQLRejected, match="Sensitive column"):
+        validate_sql(sql, datasource, {})
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "oracle"])
+@pytest.mark.parametrize("clause", [
+    "FETCH FIRST 5 ROWS WITH TIES",
+    "FETCH FIRST 5 PERCENT ROWS ONLY",
+    "FETCH FIRST 5 PERCENT ROWS WITH TIES",
+])
+def test_fetch_ties_and_percent_are_not_literal_row_caps(datasource, dialect, clause):
+    with pytest.raises(SQLRejected, match="WITH TIES|PERCENT"):
+        validate_sql(
+            f"SELECT id FROM public.orders ORDER BY id {clause}",
+            replace(datasource, dialect=dialect),
+            {},
+        )
+
+
+@pytest.mark.parametrize("literal", [
+    "$$:名$$", "$tag$:名$tag$", "$名$:名$名$", "$tag$:payload$tag$", "':名'",
+])
+def test_unicode_bind_markers_in_quoted_text_are_rejected(datasource, literal):
+    sql = f"SELECT {literal} AS note FROM public.orders LIMIT 1"
+    assert text(sql).compile().params  # SQLAlchemy scans inside all these quoted spans.
+    with pytest.raises(SQLRejected, match="Bind markers inside quoted"):
+        validate_sql(sql, datasource, {})
+
+
+@pytest.mark.parametrize("name", ["id", "名"])
+def test_normal_bind_markers_remain_valid(datasource, name):
+    sql = f"SELECT id FROM public.orders WHERE id = :{name} LIMIT 1"
+    assert set(text(sql).compile().params) == {name}
+    assert validate_sql(sql, datasource, {name: 1}).columns == ("id",)
