@@ -111,7 +111,7 @@ C1 中 SQL、参数和受限查询结果默认仍可能经过云端。部署前�
 # 查看所有数据源凭证状态（不输出 URL/密码）
 docker compose exec worker python -m safe_db_mcp.credentials status
 
-# 隐藏输入并确认；默认有效期 450 分钟，保留 30 分钟安全余量
+# 隐藏输入并确认；默认有效期 420 分钟，预留 60 分钟安全余量
 docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 450
 
 # 指定堡垒机精确到期时间，必须带时区
