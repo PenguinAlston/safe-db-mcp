@@ -89,7 +89,7 @@ Worker 启动后会创建仅本机可访问的 Unix Socket 管理接口。管理
 # 查看数据源凭证状态，不显示任何秘密
 docker compose exec worker python -m safe_db_mcp.credentials status
 
-# 默认按 7 小时 30 分钟设置保守有效期（小于堡垒机的 8 小时上限）
+# 默认按 7 小时设置保守有效期（为人工申请、复制和录入过程预留 1 小时余量）
 docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 450
 
 # 或填写堡垒机明确显示的过期时间（必须包含时区）
@@ -99,7 +99,7 @@ docker compose exec worker python -m safe_db_mcp.credentials set pg16 --expires-
 docker compose exec worker python -m safe_db_mcp.credentials clear pg16
 ```
 
-CLI 使用无回显输入并要求再次确认。连接串通过 Worker 专属的本地 Unix Socket 送入 Worker 进程内存，不经过云端 API/MCP，不写入 YAML、环境变量或持久化数据库。只有与 Worker 进程相同的操作系统用户可以访问 Socket。默认采用纯内存存储：Worker 重启后需重新录入凭证。到期后 Worker 清除内存中的凭证并暂停该数据源的新任务；凭证缺失时任务保留在队列中，不会被当成查询失败处理。到期前 30 分钟进入 `EXPIRING` 状态并写入不含秘密的日志。
+CLI 使用无回显输入并要求再次确认。连接串通过 Worker 专属的本地 Unix Socket 送入 Worker 进程内存，不经过云端 API/MCP，不写入 YAML、环境变量或持久化数据库。只有与 Worker 进程相同的操作系统用户可以访问 Socket。默认采用纯内存存储：Worker 重启后需重新录入凭证。到期后 Worker 清除内存中的凭证并暂停该数据源的新任务；凭证缺失时任务保持原状态排队，不会被当成查询失败处理；但提案仍受默认 15 分钟自身有效期约束，过期后会按正常提案生命周期失效。到期前 30 分钟进入 `EXPIRING` 状态并写入不含秘密的日志。
 
 **连接串兼容性前置检查：** 必须从运行 Worker 的实际主机验证堡垒机连接串可用。如果它依赖操作者电脑上的 localhost SSH 隧道、个人 IP 或桌面会话，不能直接复制到另一台服务器使用。
 
@@ -118,20 +118,16 @@ set +a
 uvicorn safe_db_mcp.api:app --host 127.0.0.1 --port 8080
 ```
 
-终端 2 — Worker（从仅供 Worker 使用的密钥来源加载数据源 URL）：
+终端 2 — Worker（不注入数据库 URL；启动后通过本机 Socket 接收人工凭证）：
 
 ```bash
 export SAFEDB_DB_PATH=./data/safedb.sqlite3
 export SAFEDB_DATASOURCES_FILE=./config/datasources.yaml
-# 仅注入此 Worker 所需的数据源 URL，例如从 Vault
-# 或本地密钥管理器注入。不要将这些值加入 API 的环境变量。
-read -r -s -p "PG16_URL: " PG16_URL
-export PG16_URL
-printf '\\n'
+# local_manual 模式不需要数据库 URL 环境变量
 python -m safe_db_mcp.worker
 ```
 
-API 使用的 `.env` 中不得包含数据库 URL。Worker 不加载包含 Agent/Reviewer Token 的 `.env`，只注入存储路径、数据源配置及所需数据库密钥。使用 Compose 时，数据库 URL 只传递给 Worker 服务。
+API 使用的 `.env` 中不得包含数据库 URL。Worker 不加载包含 Agent/Reviewer Token 的 `.env`，只注入存储路径和数据源配置。堡垒机临时连接串通过 Worker 本地凭证 CLI 录入。
 
 终端 3 — MCP Server（使用未加载 API 或 Worker 密钥的新终端，不要 `source .env`）：
 
@@ -151,13 +147,15 @@ MCP Server 默认使用 stdio。配置 MCP 客户端运行 `python -m safe_db_mc
 cp .env.example .env
 cp config/datasources.example.yaml config/datasources.yaml
 # 编辑 .env（仅包含 Agent/审核配置）和数据源 YAML。
-# 从密钥管理器将仅供 Worker 使用的数据库 URL 导出到当前 Shell，然后执行：
-docker compose up --build
+# 启动 API 和 Worker；先不要向任何容器注入数据库 URL
+docker compose up --build -d
+# 在 Worker 容器内录入临时 DSN
+docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 420
 ```
 
-Linux 使用绑定挂载时，需预先创建 `data` 目录，并确保容器 UID/GID 10001 可写、其他非授权用户不可读写；否则 SQLite 无法初始化。不要通过将目录设为全员可写来绕过权限错误。
+Linux 使用绑定挂载时，需预先创建 `data` 目录，并确保容器 UID/GID 10001 可写、其他非授权用户不可读写；否则 SQLite 无法初始化。不要通过将目录设为全员可写来绕过权限错误。Worker 的 `worker-run` 命名卷由镜像预设为 UID 10001 的私有目录。
 
-Compose 将 API 端口绑定到 loopback 地址，并且不会把数据库 URL 环境变量传递给 API 服务。Worker 会接收数据源 URL 环境变量。生产环境应使用 Secret Manager/Vault 身份替代基于环境变量的密钥注入，并限制 Worker 的网络出口。Compose 和 SQLite 仅用于本地开发。
+Compose 将 API 端口绑定到 loopback 地址，API 和 Worker 均不接收数据库 URL 环境变量。Worker 从本机 Unix Socket 的凭证管理器读取进程内存中的临时凭证。生产环境仍应评估接入客户自管 Vault/KMS，并限制 Worker 的网络出口。Compose 和 SQLite 仅用于本地开发。
 
 ### Docker Compose 中的 Worker 凭证管理
 
