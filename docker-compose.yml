@@ -9,7 +9,7 @@ services:
       SAFEDB_DATASOURCES_FILE: /app/config/datasources.yaml
       SAFEDB_AGENT_TOKEN: ${SAFEDB_AGENT_TOKEN:?set SAFEDB_AGENT_TOKEN}
       SAFEDB_REVIEWER_TOKEN: ${SAFEDB_REVIEWER_TOKEN:?set SAFEDB_REVIEWER_TOKEN}
-      SAFEDB_AGENT_ID: ${SAFEDB_AGENT_ID:-agent-dev}
+      SAFEDB_AGENT_ID: ${SAFEDB_AGENT_ID:-local-agent}
       SAFEDB_REVIEWER_ID: ${SAFEDB_REVIEWER_ID:-reviewer-dev}
     volumes:
       - ./data:/data
@@ -23,10 +23,9 @@ services:
       SAFEDB_DB_PATH: /data/safedb.sqlite3
       SAFEDB_DATASOURCES_FILE: /app/config/datasources.yaml
       SAFEDB_WORKER_INTERVAL_SECONDS: 1
-      DB_A_URL: ${DB_A_URL:-}
-      DB_B_URL: ${DB_B_URL:-}
-      DB_C_URL: ${DB_C_URL:-}
-      DB_D_URL: ${DB_D_URL:-}
+      MYSQL8_URL: ${MYSQL8_URL:-}
+      PG16_URL: ${PG16_URL:-}
+      ORACLE19C_URL: ${ORACLE19C_URL:-}
     volumes:
       - ./data:/data
       - ./config:/app/config:ro
