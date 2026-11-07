@@ -90,7 +90,7 @@ Worker 启动后会创建仅本机可访问的 Unix Socket 管理接口。管理
 docker compose exec worker python -m safe_db_mcp.credentials status
 
 # 默认按 7 小时设置保守有效期（为人工申请、复制和录入过程预留 1 小时余量）
-docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 450
+docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minutes 420
 
 # 或填写堡垒机明确显示的过期时间（必须包含时区）
 docker compose exec worker python -m safe_db_mcp.credentials set pg16 --expires-at 2026-11-08T02:00:00+08:00
