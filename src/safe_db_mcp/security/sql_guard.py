@@ -68,7 +68,7 @@ def _reject_bind_markers_in_quoted_text(sql: str) -> None:
     while i < len(sql):
         char = sql[i]
         if quote is not None:
-            if char == ":" and i + 1 < len(sql) and re.match(r"\\w", sql[i + 1]):
+            if char == ":" and i + 1 < len(sql) and re.match(r"\w", sql[i + 1]):
                 raise SQLRejected("Bind markers inside quoted SQL text are disabled")
             if char == quote:
                 if i + 1 < len(sql) and sql[i + 1] == quote:
