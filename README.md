@@ -83,10 +83,15 @@ cp config/datasources.example.yaml config/datasources.yaml
 
 推荐的企业/堡垒机配置使用 `credential_source.type: local_manual`，见 `config/datasources.example.yaml`。YAML 只保存数据源元数据与查询策略，不保存 `url_env` 或临时连接串。
 
-Worker 启动后会创建仅本机可访问的 Unix Socket 管理接口。管理员在 Worker 主机或 Worker 容器内，通过隐藏输入的 CLI 人工录入堡垒机签发的临时连接串：
+Worker 启动后会同时提供本机 Web 管理面板和 Unix Socket 管理接口。推荐日常通过浏览器面板管理凭证；CLI 仍可用于无图形环境的服务器：
 
 ```bash
-# 查看数据源凭证状态，不显示任何秘密
+# 首次设置 Web 面板密码（仅需执行一次；Worker 重启后需重新设置）
+docker compose exec worker python -m safe_db_mcp.credentials ui-password set
+
+# 浏览器打开 http://127.0.0.1:8090，登录后即可查看状态、录入/替换/清除凭证
+
+# CLI 方式：查看数据源凭证状态，不显示任何秘密
 docker compose exec worker python -m safe_db_mcp.credentials status
 
 # 默认按 7 小时设置保守有效期（为人工申请、复制和录入过程预留 1 小时余量）
@@ -155,11 +160,11 @@ docker compose exec worker python -m safe_db_mcp.credentials set pg16 --ttl-minu
 
 Linux 使用绑定挂载时，需预先创建 `data` 目录，并确保容器 UID/GID 10001 可写、其他非授权用户不可读写；否则 SQLite 无法初始化。不要通过将目录设为全员可写来绕过权限错误。Worker 的 `worker-run` 命名卷由镜像预设为 UID 10001 的私有目录。
 
-Compose 将 API 端口绑定到 loopback 地址，API 和 Worker 均不接收数据库 URL 环境变量。Worker 从本机 Unix Socket 的凭证管理器读取进程内存中的临时凭证。生产环境仍应评估接入客户自管 Vault/KMS，并限制 Worker 的网络出口。Compose 和 SQLite 仅用于本地开发。
+Compose 将 API 和 Worker 管理面板端口均绑定到宿主机 loopback 地址。API 和 Worker 均不接收数据库 URL 环境变量。Worker 从本机凭证管理器读取进程内存中的临时凭证。当前保留 SQLite，适用于 API 与单个 Worker 同机运行的单节点部署；数据库文件必须位于本机可靠磁盘，不得放在 NFS/SMB 等网络共享文件系统。此部署形态仍是安全原型，不是多节点 SaaS。
 
 ### Docker Compose 中的 Worker 凭证管理
 
-Worker 使用独立的命名卷保存本地 Unix Socket 运行目录，不包含凭证数据。CLI 在 Worker 容器内执行，默认以 Worker 的 `appuser` 身份运行。不要将凭证 CLI 暴露为公网 HTTP API，也不要通过云端 MCP 工具提交数据库连接串。
+Worker 使用独立的命名卷保存本地 Unix Socket 运行目录，不包含凭证数据。管理面板默认仅映射到宿主机 `127.0.0.1:8090`，浏览器访问 `http://127.0.0.1:8090`。首次需在 Worker 容器内设置面板密码：`docker compose exec worker python -m safe_db_mcp.credentials ui-password set`。密码哈希和登录会话均仅保存在 Worker 进程内存中；Worker 重启后需重新设置。不要将端口改为公网或局域网监听，也不要通过云端 MCP 工具提交数据库连接串。
 
 
 ## 提交并审核查询
