@@ -1,70 +1,70 @@
 # AGENTS.md
 
-Instructions for AI coding agents and human contributors working in this repository.
+本文档适用于在本仓库中工作的 AI 编码 Agent 和人工贡献者。
 
-## Project goal and trust boundaries
+## 项目目标与信任边界
 
-SafeDB-MCP is a guarded SQL query gateway. Treat the following as hard architectural boundaries:
+SafeDB-MCP 是一个受控 SQL 查询网关。以下内容属于必须遵守的架构边界：
 
-1. The Agent/MCP process and API must never receive database credentials or open database connections.
-2. Only the separate worker process may resolve datasource secrets and connect to databases.
-3. A human approval is an additional gate, never an override for SQL validation, datasource authorization, catalog allowlists, native read-only mode, hard limits, or result limits.
-4. Fail closed whenever parsing, authorization, object resolution, native read-only verification, or timeout enforcement is uncertain.
-5. This repository is a security prototype, not a production-ready database isolation boundary.
+1. Agent/MCP 进程和 API 绝不能接收数据库凭证，也不能建立数据库连接。
+2. 只有独立的 Worker 进程可以解析数据源密钥并连接数据库。
+3. 人工审批只是额外的一道门禁，绝不能覆盖 SQL 校验、数据源授权、数据库目录白名单、原生只读模式、硬性限制或结果限制。
+4. 只要 SQL 解析、授权、对象解析、原生只读验证或超时控制存在不确定性，就必须采取 fail-closed（默认拒绝）策略。
+5. 本仓库目前是安全原型，并非已达到生产就绪标准的数据库隔离边界。
 
-## Mandatory change rules
+## 强制变更规则
 
-- Read `SECURITY.md`, the relevant adapter, `security/sql_guard.py`, `service.py`, `store.py`, and the affected tests before changing security-sensitive code.
-- Keep database URLs out of API/MCP configuration, logs, test fixtures committed to the repository, docs, and examples. Use obviously fake placeholders in tests.
-- Never log SQL text, bind values, connection URLs, credentials, driver exception messages, or query result content.
-- Do not weaken SQL AST restrictions, function allowlists, datasource/Agent allowlists, catalog object checks, native read-only checks, reviewer separation, or resource limits just to make a test pass.
-- Every accepted SQL form must be safe under both the SQLGlot parser and the SQLAlchemy/driver/server lexical interpretation. Add parser-differential regression tests when changing SQL acceptance.
-- Keep table identifiers schema-qualified, simple and unquoted unless a dialect-aware resolver is implemented and tested. Avoid case-folding or string rewrites that can map one database object to another.
-- Worker state transitions and result publication must use the active fencing token and expected status. Never add an unconditional worker write that can publish after lease recovery.
-- Proposal state changes and their audit events must be committed atomically.
-- Any database session state (read-only mode, statement timeout, session variables, cursor state) must be reset before returning a connection to the pool. Invalidate the connection if safe reset cannot be guaranteed.
-- Preserve bounded execution: connection acquisition, database round trips, query execution, result rows and result bytes need explicit limits.
-- Do not claim an integration test passed unless it ran against the actual database and driver versions.
+- 修改安全敏感代码前，先阅读 \`SECURITY.md\`、相关数据库适配器、\`security/sql_guard.py\`、\`service.py\`、\`store.py\` 以及受影响的测试。
+- 数据库 URL 不得出现在 API/MCP 配置、日志、提交到仓库的测试夹具、文档或示例中。测试中只能使用明显为虚构的占位值。
+- 绝不记录 SQL 文本、绑定参数值、连接 URL、凭证、驱动异常消息或查询结果内容。
+- 不得仅为了让测试通过，就放宽 SQL AST 限制、函数白名单、数据源/Agent 白名单、目录对象检查、原生只读检查、审核隔离或资源限制。
+- 每种被接受的 SQL 形式，都必须同时满足 SQLGlot 解析器与 SQLAlchemy/驱动/数据库服务器的词法解释安全要求。修改 SQL 接受规则时，必须增加解析器差异回归测试。
+- 表标识符必须带 Schema、形式简单且不加引号，除非已经实现并测试了支持对应方言的标识符解析器。避免大小写折叠或字符串改写导致映射到另一个数据库对象。
+- Worker 状态转换和结果发布必须使用当前有效的 fencing token 及预期状态。不得添加无条件的 Worker 写入，以免租约恢复后仍发布旧结果。
+- 提案状态变更及其审计事件必须在同一事务中提交。
+- 任何数据库会话状态（只读模式、语句超时、会话变量、游标状态）在连接归还连接池之前都必须重置。如果无法保证安全重置，则必须使该连接失效并丢弃。
+- 必须维持有界执行：连接获取、数据库往返、查询执行、结果行数和结果字节数均需设置明确限制。
+- 除非确实在对应数据库和驱动版本上运行过集成测试，否则不得声称集成测试已通过。
 
-## Database adapter requirements
+## 数据库适配器要求
 
-For any new or modified adapter:
+新增或修改任何适配器时：
 
-- Implement explicit native read-only transaction activation and verify the server-side state where the database supports verification.
-- Activate read-only mode before the first user SQL statement. Oracle has a strict first-statement requirement; do not add pings or metadata SQL before it in that transaction.
-- Treat metadata/catalog lookup failure as denial.
-- Reject views, synonyms, materialized views, foreign/external objects unless a documented, separately reviewed policy explicitly allows them.
-- Apply timeouts to planning and catalog checks as well as execution.
-- Test connection-pool reuse and cleanup after success, timeout, cancellation, truncation and exceptions.
-- Document dialect-specific limitations in `SECURITY.md` and `README.md`.
+- 实现明确的数据库原生只读事务激活；如果数据库支持服务器端状态验证，还必须验证服务器端状态。
+- 必须在第一条用户 SQL 语句执行前激活只读模式。Oracle 对第一条语句有严格要求；不得在同一事务中提前发送 ping 或元数据 SQL。
+- 元数据/目录查询失败时必须拒绝访问。
+- 除非有明确记录且经过单独安全评审的策略允许，否则拒绝视图、同义词、物化视图、外部表/外部对象。
+- 对查询规划和目录检查也必须应用超时，而不仅仅是对最终执行应用超时。
+- 测试成功、超时、取消、截断和异常之后的连接池复用及清理行为。
+- 在 \`SECURITY.md\` 和 \`README.md\` 中记录方言特有的限制。
 
-## Worker and store requirements
+## Worker 与存储层要求
 
-- Claims must be atomic and return a unique fencing token.
-- Lease recovery must invalidate the old token.
-- Every completion/failure/block transition must compare both the token and expected status.
-- A worker that loses its claim must not update proposal state, audit completion, or publish results.
-- State and corresponding audit record must be committed in one transaction.
-- SQLite is a local development store only. Any production store must preserve the fencing/CAS behavior with transactional locking.
+- 任务认领必须是原子操作，并返回唯一的 fencing token。
+- 租约恢复必须使旧 token 失效。
+- 每次完成、失败或阻止状态转换，都必须同时校验 token 和预期状态。
+- 失去任务认领权的 Worker 不得更新提案状态、写入完成审计或发布结果。
+- 状态和对应审计记录必须在同一事务中提交。
+- SQLite 仅用于本地开发。任何生产存储都必须通过事务锁定保留 fencing/CAS 行为。
 
-## Tests and local checks
+## 测试与本地检查
 
-Run these before opening or updating a PR:
+创建或更新 PR 前，运行以下检查：
 
-```bash
+\`\`\`bash
 pip install -e ".[dev]"
 ruff check src tests
 pytest -q
-```
+\`\`\`
 
-Add tests for both allowed behavior and rejection cases. Security tests should include malformed SQL, comment carriers, quoted identifiers, bind marker edge cases, unauthorized objects, approval races, expired worker claims and connection reset behavior.
+必须同时为允许行为和拒绝行为添加测试。安全测试应涵盖格式错误的 SQL、注释载体、带引号的标识符、绑定参数标记边界情况、未授权对象、审批竞争、过期 Worker 任务认领，以及连接重置行为。
 
-Live database tests are separate from unit tests. When live database services are not available, state that clearly and leave the production-readiness claim unchanged.
+真实数据库测试与单元测试分开。当无法使用真实数据库服务时，必须明确说明，并且不得因此修改项目的生产就绪状态声明。
 
-## Documentation and review
+## 文档与评审
 
-- Update `README.md` when user-visible setup, configuration, API, or operating behavior changes.
-- Update `SECURITY.md` whenever a security control or known gap changes.
-- Keep examples runnable, use placeholder values, and never include a real secret.
-- Keep changes focused. Explain security assumptions and residual risks in the PR description.
-- Do not merge or deploy unless the task explicitly requests it.
+- 用户可见的安装、配置、API 或运维行为发生变化时，更新 \`README.md\`。
+- 安全控制或已知缺口发生变化时，更新 \`SECURITY.md\`。
+- 示例必须可运行，使用占位值，绝不包含真实密钥。
+- 保持变更范围聚焦。在 PR 描述中说明安全假设和剩余风险。
+- 除非任务明确要求，否则不要合并 PR 或部署。
