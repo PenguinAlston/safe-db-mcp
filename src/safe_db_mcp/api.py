@@ -26,6 +26,7 @@ def list_datasources(principal: Principal = Depends(require_agent)):
         "datasources": [
             {"datasource_id": ds.datasource_id, "name": ds.name, "dialect": ds.dialect}
             for ds in datasources.values()
+            if principal.actor_id in ds.allowed_agents
         ]
     }
 
