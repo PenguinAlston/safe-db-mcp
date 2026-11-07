@@ -152,6 +152,8 @@ def load_datasources(path: str | None = None) -> dict[str, DataSource]:
         else:
             if not isinstance(credential_source, dict):
                 raise ValueError(f"{datasource_id}: credential_source must be a mapping")
+            if set(credential_source) - {"type", "max_ttl_minutes"}:
+                raise ValueError(f"{datasource_id}: unsupported credential_source field")
             credential_mode = credential_source.get("type")
             if credential_mode == "local_manual":
                 if "url_env" in item:
