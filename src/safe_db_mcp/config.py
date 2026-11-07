@@ -17,7 +17,7 @@ class DataSource:
     datasource_id: str
     name: str
     dialect: str
-    url_env: str
+    url_env: str | None
     readonly_mode: str
     allowed_tables: frozenset[str]
     sensitive_columns: frozenset[str]
@@ -28,8 +28,16 @@ class DataSource:
     max_result_bytes: int
     timeout_ms: int
     allowed_agents: frozenset[str] = frozenset()
+    credential_mode: str = "environment"
+    max_credential_ttl_minutes: int = 480
 
-    def database_url(self) -> str:
+    def database_url(self, credential_provider=None) -> str:
+        if self.credential_mode == "local_manual":
+            if credential_provider is None:
+                raise RuntimeError("Datasource requires a Worker-local credential")
+            return credential_provider.get_url(self.datasource_id)
+        if not self.url_env:
+            raise RuntimeError("Datasource environment credential is not configured")
         value = os.getenv(self.url_env, "").strip()
         if not value:
             raise RuntimeError(
@@ -132,11 +140,49 @@ def load_datasources(path: str | None = None) -> dict[str, DataSource]:
                 f"{datasource_id}: sensitive_columns must use unqualified column names"
             )
 
+        credential_source = item.get("credential_source")
+        if credential_source is None:
+            if not isinstance(item.get("url_env"), str) or not item["url_env"].strip():
+                raise ValueError(
+                    f"{datasource_id}: url_env is required unless credential_source is configured"
+                )
+            credential_mode = "environment"
+            max_credential_ttl_minutes = 480
+            url_env = item["url_env"].strip()
+        else:
+            if not isinstance(credential_source, dict):
+                raise ValueError(f"{datasource_id}: credential_source must be a mapping")
+            credential_mode = credential_source.get("type")
+            if credential_mode == "local_manual":
+                if "url_env" in item:
+                    raise ValueError(
+                        f"{datasource_id}: url_env cannot be combined with local_manual credentials"
+                    )
+                max_credential_ttl_minutes = _positive_int(
+                    credential_source, "max_ttl_minutes", 480
+                )
+                if max_credential_ttl_minutes > 480:
+                    raise ValueError(
+                        f"{datasource_id}: max_ttl_minutes cannot exceed 480"
+                    )
+                url_env = None
+            elif credential_mode == "environment":
+                if not isinstance(item.get("url_env"), str) or not item["url_env"].strip():
+                    raise ValueError(
+                        f"{datasource_id}: url_env is required for environment credentials"
+                    )
+                max_credential_ttl_minutes = 480
+                url_env = item["url_env"].strip()
+            else:
+                raise ValueError(
+                    f"{datasource_id}: unsupported credential_source type"
+                )
+
         result[datasource_id] = DataSource(
             datasource_id=datasource_id,
             name=str(item.get("name", datasource_id)),
             dialect=dialect,
-            url_env=str(item["url_env"]),
+            url_env=url_env,
             readonly_mode=str(item.get("readonly_mode", "unsupported")),
             allowed_tables=allowed,
             sensitive_columns=sensitive,
@@ -147,6 +193,8 @@ def load_datasources(path: str | None = None) -> dict[str, DataSource]:
             max_result_bytes=_positive_int(item, "max_result_bytes", 524288),
             timeout_ms=_positive_int(item, "timeout_ms", 5000),
             allowed_agents=agents,
+            credential_mode=credential_mode,
+            max_credential_ttl_minutes=max_credential_ttl_minutes,
         )
 
     if not result:
