@@ -42,6 +42,7 @@ def test_select_from_allowed_table(datasource):
     "SELECT id FROM public.other_table",
     "SELECT id FROM public.orders; SELECT id FROM public.customers",
     "WITH x AS (DELETE FROM public.orders RETURNING id) SELECT id FROM x",
+    "WITH orders AS (SELECT id FROM private.orders) SELECT id FROM orders",
 ])
 def test_unsafe_sql_is_rejected(datasource, sql):
     with pytest.raises(SQLRejected):
