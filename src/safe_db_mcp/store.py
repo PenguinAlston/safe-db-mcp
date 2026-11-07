@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ class ProposalStore:
         return conn
 
     def _init_db(self):
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             conn.executescript("""
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS proposals (
@@ -53,7 +54,7 @@ class ProposalStore:
             """)
 
     def create(self, proposal: dict[str, Any]):
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             conn.execute(
                 """INSERT INTO proposals
                 (proposal_id,datasource_id,requester_id,purpose,sql_text,parameters_json,
@@ -69,14 +70,14 @@ class ProposalStore:
             )
 
     def get(self, proposal_id: str) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)
             ).fetchone()
         return self._decode(row) if row else None
 
     def list_status(self, status: str, limit: int = 20) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT * FROM proposals WHERE status=? ORDER BY created_at LIMIT ?",
                 (status, limit),
@@ -84,7 +85,7 @@ class ProposalStore:
         return [self._decode(row) for row in rows]
 
     def claim(self, proposal_id: str, expected: str, claimed: str) -> bool:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
             cur = conn.execute(
                 "UPDATE proposals SET status=? WHERE proposal_id=? AND status=?",
@@ -107,13 +108,13 @@ class ProposalStore:
                 if key.endswith("_json") and value is not None else value
             )
         values.append(proposal_id)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             conn.execute(
                 f"UPDATE proposals SET {assignments} WHERE proposal_id=?", values
             )
 
     def decide(self, proposal_id: str, expected: str, status: str, approval: dict):
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
             cur = conn.execute(
                 """UPDATE proposals SET status=?, approval_json=?
@@ -125,8 +126,7 @@ class ProposalStore:
 
     def audit(self, proposal_id: str, event_type: str, actor_id: str,
               created_at: str, details: dict[str, Any] | None = None):
-        # Audit details must not contain credentials, SQL values or query result rows.
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             conn.execute(
                 """INSERT INTO audit_events
                    (proposal_id,event_type,actor_id,created_at,details_json)
