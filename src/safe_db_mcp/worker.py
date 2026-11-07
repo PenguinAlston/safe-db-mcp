@@ -15,6 +15,7 @@ from safe_db_mcp.credentials import (
 from safe_db_mcp.config import load_datasources
 from safe_db_mcp.service import QueryService, iso, now
 from safe_db_mcp.store import ProposalStore
+from safe_db_mcp.worker_ui import WorkerUiServer
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("safedb.worker")
@@ -155,6 +156,18 @@ def main():
     if interval <= 0:
         credential_server.close()
         raise ValueError("SAFEDB_WORKER_INTERVAL_SECONDS must be positive")
+
+    ui_server = None
+    if os.getenv("SAFEDB_WORKER_UI_ENABLED", "true").casefold() in {"1", "true", "yes"}:
+        ui_host = os.getenv("SAFEDB_WORKER_UI_HOST", "127.0.0.1")
+        ui_port = int(os.getenv("SAFEDB_WORKER_UI_PORT", "8090"))
+        ui_server = WorkerUiServer(credential_manager, host=ui_host, port=ui_port)
+        try:
+            ui_server.start()
+        except Exception as exc:
+            logger.error("Worker Console did not start (%s); local CLI remains available", type(exc).__name__)
+            ui_server = None
+
     logger.info("SafeDB worker started; target database credentials remain worker-local.")
     logger.info("Local credential management socket is ready.")
     try:
@@ -162,6 +175,8 @@ def main():
             run_once(store, service)
             time.sleep(interval)
     finally:
+        if ui_server is not None:
+            ui_server.close()
         credential_server.close()
 
 
