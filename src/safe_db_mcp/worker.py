@@ -10,6 +10,7 @@ from safe_db_mcp.credentials import (
     CredentialUnavailable,
     CredentialSocketServer,
     InMemoryCredentialManager,
+    validate_database_credential,
 )
 from safe_db_mcp.config import load_datasources
 from safe_db_mcp.service import QueryService, iso, now
@@ -141,7 +142,9 @@ def run_once(store: ProposalStore, service: QueryService) -> int:
 def main():
     store = ProposalStore()
     datasources = load_datasources()
-    credential_manager = InMemoryCredentialManager(datasources)
+    credential_manager = InMemoryCredentialManager(
+        datasources, validator=validate_database_credential
+    )
     socket_path = os.getenv(
         "SAFEDB_CREDENTIAL_SOCKET", "./run/safedb/credentials.sock"
     )
