@@ -18,7 +18,8 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, Decimal):
-        return float(value)
+        # Preserve exact decimal precision for financial and numeric data.
+        return str(value)
     if isinstance(value, bytes):
         return value.hex()
     return value
@@ -114,6 +115,49 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
             return False
         return False
 
+    def verify_allowed_tables(self, tables: tuple[str, ...]) -> bool:
+        """Allow only schema-qualified base tables, never views or synonyms."""
+        if not tables:
+            return False
+        try:
+            with self.engine.connect() as conn:
+                for key in tables:
+                    parts = key.split(".")
+                    if len(parts) != 2 or not all(parts):
+                        return False
+                    schema, table = parts
+                    if self.dialect == "mysql":
+                        row = conn.execute(
+                            text("SELECT TABLE_TYPE FROM information_schema.TABLES "
+                                 "WHERE LOWER(TABLE_SCHEMA)=:schema AND LOWER(TABLE_NAME)=:table"),
+                            {"schema": schema, "table": table},
+                        ).scalar()
+                        if row != "BASE TABLE":
+                            return False
+                    elif self.dialect == "postgres":
+                        row = conn.execute(
+                            text("SELECT c.relkind FROM pg_class c "
+                                 "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                                 "WHERE LOWER(n.nspname)=:schema AND LOWER(c.relname)=:table"),
+                            {"schema": schema, "table": table},
+                        ).scalar()
+                        if row not in {"r", "p"}:
+                            return False
+                    elif self.dialect == "oracle":
+                        row = conn.execute(
+                            text("SELECT OBJECT_TYPE FROM ALL_OBJECTS "
+                                 "WHERE LOWER(OWNER)=:schema AND LOWER(OBJECT_NAME)=:table "
+                                 "AND OBJECT_TYPE='TABLE'"),
+                            {"schema": schema, "table": table},
+                        ).scalar()
+                        if row != "TABLE":
+                            return False
+                    else:
+                        return False
+            return True
+        except SQLAlchemyError:
+            return False
+
     def explain(self, sql: str, parameters: dict[str, Any]) -> QueryPlan:
         if self.dialect == "oracle":
             # Oracle EXPLAIN PLAN writes PLAN_TABLE. Avoid hidden writes here;
@@ -193,6 +237,7 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
         timeout_ms: int,
     ) -> dict[str, Any]:
         started = time.monotonic()
+        deadline = started + timeout_ms / 1000
         rows_out = []
         byte_count = 0
         truncated = False
@@ -200,9 +245,23 @@ class SQLAlchemyReadOnlyAdapter(DatabaseAdapter):
         with self.engine.connect() as conn:
             try:
                 self._begin_native_readonly(conn, timeout_ms)
+                if self.dialect == "oracle":
+                    driver = conn.connection.driver_connection
+                    driver.call_timeout = min(
+                        timeout_ms, max(1, int((deadline - time.monotonic()) * 1000))
+                    )
                 result = conn.execute(text(sql), parameters)
                 columns = list(result.keys())
                 while len(rows_out) < max_rows + 1:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        if self.dialect == "oracle":
+                            conn.connection.driver_connection.cancel()
+                        raise TimeoutError("Query exceeded total execution time budget")
+                    if self.dialect == "oracle":
+                        conn.connection.driver_connection.call_timeout = min(
+                            timeout_ms, max(1, int(remaining * 1000))
+                        )
                     batch = result.fetchmany(
                         min(100, max_rows + 1 - len(rows_out))
                     )
