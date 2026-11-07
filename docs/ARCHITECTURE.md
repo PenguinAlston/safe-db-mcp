@@ -104,3 +104,14 @@ SQLite 是开发环境使用的存储。它的事务机制可以测试当前单�
 **重要兼容性检查：** 必须确认堡垒机返回的连接串能从计划部署 Worker 的内网主机直接访问。如果它依赖操作者电脑上的 localhost SSH 隧道或设备绑定，则需把 Worker 部署到相应主机，或由客户提供受控内网隧道/代理。
 
 当前仓库还没有实现远程 Worker 协议、远程 MCP、多租户 OAuth 或人工凭证管理入口；该架构是目标设计，不是现有功能。项目仍为安全原型。
+
+
+## 当前推荐部署形态：单节点客户内网部署
+
+为优先获得可部署、可运维的可靠方案，当前阶段保留 SQLite，不提前引入 PostgreSQL 或跨主机队列。推荐一台客户控制的主机运行 API、单个 Worker 和本机 SQLite；MCP 客户端通过客户批准的网络/VPN 连接 API。Worker UI 只在这台主机的 localhost 开放。
+
+- API 与 Worker 共享同一台主机上的 SQLite 文件；SQLite 使用本地持久化磁盘。
+- 单节点限定一个 API 实例和一个 Worker 实例；不通过 NFS/SMB 共享 SQLite。
+- Worker UI 在 `127.0.0.1:8090` 提供本机凭证管理页面；Compose 映射只绑定宿主机 loopback。
+- Worker 本地凭证仍只驻留进程内存；UI 登录密码哈希也只在 Worker 进程内存。二者在 Worker 重启后需重新设置/录入。
+- 若未来需要云端集中控制、多客户多 Worker 或高可用横向扩容，再迁移为 PostgreSQL/队列和出站 Worker 协议；当前不为未实现的 SaaS 需求引入分布式复杂度。
