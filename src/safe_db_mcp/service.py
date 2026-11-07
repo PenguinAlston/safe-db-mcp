@@ -73,6 +73,9 @@ class QueryService:
             if not readonly:
                 self._block(proposal, "READONLY_NOT_VERIFIED")
                 return
+            if not adapter.verify_allowed_tables(query.tables):
+                self._block(proposal, "DATABASE_OBJECT_NOT_ALLOWED")
+                return
             plan = adapter.explain(proposal["sql"], proposal["parameters"])
             assessment = assess_risk(query, plan, datasource, readonly)
             if (
@@ -131,12 +134,22 @@ class QueryService:
             if not adapter.verify_readonly():
                 self._block(proposal, "READONLY_NOT_VERIFIED")
                 return
+            if not adapter.verify_allowed_tables(query.tables):
+                self._block(proposal, "DATABASE_OBJECT_NOT_ALLOWED")
+                return
             plan = adapter.explain(proposal["sql"], proposal["parameters"])
             assessment = assess_risk(query, plan, datasource, True)
             old = proposal.get("risk") or {}
-            old_level = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}.get(old.get("level"), 2)
-            new_level = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}[assessment.level]
-            if new_level > old_level:
+            # Approval is bound to the planner/risk snapshot, not only the SQL hash.
+            risk_fields = (
+                "score", "level", "reasons", "estimated_scan_rows",
+                "estimated_result_rows",
+            )
+            risk_changed = any(
+                old.get(field) != getattr(assessment, field)
+                for field in risk_fields
+            )
+            if risk_changed:
                 self.store.update(
                     proposal["proposal_id"],
                     status="PENDING_APPROVAL",
