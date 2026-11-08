@@ -176,6 +176,8 @@ Compose 将 API 和 Worker 管理面板端口均绑定到宿主机 loopback 地�
 
 Worker 使用独立的命名卷保存本地 Unix Socket 运行目录，不包含凭证数据。管理面板默认仅映射到宿主机 `127.0.0.1:8090`，浏览器访问 `http://127.0.0.1:8090`。首次需在 Worker 容器内设置面板密码：`docker compose exec worker python -m safe_db_mcp.credentials ui-password set`。密码哈希和登录会话均仅保存在 Worker 进程内存中；Worker 重启后需重新设置。不要将端口改为公网或局域网监听，也不要通过云端 MCP 工具提交数据库连接串。
 
+人工录入的临时凭证默认在声明到期前 60 秒停止使用并从 Worker 内存中清除；剩余有效期不足 60 秒的凭证不会被接受。该安全窗口不替代按堡垒机实际签发时间设置 TTL，也不代表正在运行的数据库会话会自动终止。
+
 
 ## 提交并审核查询
 
