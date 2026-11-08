@@ -51,7 +51,9 @@ def test_missing_credential_is_not_available():
 
 
 def test_expired_credential_is_erased_and_fails_closed():
-    credentials = manager()
+    credentials = InMemoryCredentialManager(
+        {"pg": datasource()}, expiry_safety_window=timedelta(0)
+    )
     credentials.set_credential(
         "pg", "postgresql+psycopg://user:password@db.internal/app",
         datetime.now(UTC) + timedelta(milliseconds=10),
