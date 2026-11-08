@@ -75,6 +75,30 @@ def test_expiring_state_is_reported_before_expiry():
     assert credentials.is_available("pg")
 
 
+def test_credential_inside_expiry_safety_window_is_rejected():
+    credentials = manager()
+    with pytest.raises(ValueError, match="inside the safety window"):
+        credentials.set_credential(
+            "pg", "postgresql+psycopg://user:password@db.internal/app",
+            datetime.now(UTC) + timedelta(seconds=30),
+        )
+
+
+def test_credential_is_erased_before_hard_expiry_when_inside_safety_window():
+    credentials = manager()
+    credentials.set_credential(
+        "pg", "postgresql+psycopg://user:password@db.internal/app",
+        datetime.now(UTC) + timedelta(hours=2),
+    )
+    record = credentials._records["pg"]
+    record.expires_at = datetime.now(UTC) + timedelta(seconds=30)
+
+    assert not credentials.is_available("pg")
+    assert credentials.status("pg")["state"] == "NEEDS_CREDENTIAL"
+    with pytest.raises(CredentialUnavailable):
+        credentials.get_url("pg")
+
+
 def test_replacement_increments_version_and_clear_removes_secret():
     credentials = manager()
     first = "postgresql+psycopg://user:first@db.internal/app"
