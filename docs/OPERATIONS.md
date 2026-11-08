@@ -47,6 +47,8 @@ docker compose exec worker python -m safe_db_mcp.credentials ui-password set
 
 密码使用隐藏式交互输入，至少 14 个字符；Worker 仅保存 scrypt 哈希。登录后使用 HttpOnly、SameSite=Strict Cookie 和 CSRF token，登录失败按分钟窗口限流。面板检查 Host/Origin，仅允许 localhost 来源，并设置 CSP；Docker Compose 仅将容器 8090 端口映射到宿主机 `127.0.0.1:8090`。不要把它反向代理到公网，不要将端口发布到 `0.0.0.0` 宿主机接口。Worker 重启后面板密码和会话丢失，必须重新设置密码。
 
+临时凭证默认在声明的到期时间前 60 秒停止使用，并从 Worker 内存中清除；新录入的凭证也必须至少剩余 60 秒有效期。该安全窗口用于避免在凭证即将失效时启动新查询，不替代堡垒机实际 TTL、数据库连接超时或查询执行时限的协调。
+
 在无浏览器的服务器上，仍可继续使用 Unix Socket CLI。UI 启动失败时 Worker 会记录不含凭证的错误类型，并保留 CLI 管理能力。
 
 ### SQLite 在线备份
