@@ -53,9 +53,13 @@ class InMemoryCredentialManager:
         datasources: dict[str, DataSource],
         expiring_window: timedelta = timedelta(minutes=30),
         validator: Callable[[DataSource, str], bool] | None = None,
+        expiry_safety_window: timedelta = timedelta(seconds=60),
     ):
+        if expiry_safety_window < timedelta(0):
+            raise ValueError("Credential expiry safety window must not be negative")
         self._datasources = datasources
         self._expiring_window = expiring_window
+        self._expiry_safety_window = expiry_safety_window
         self._validator = validator
         self._records: dict[str, _Credential] = {}
         self._ui_password_salt: bytes | None = None
@@ -93,7 +97,9 @@ class InMemoryCredentialManager:
         if record is None:
             return False
         old_state = record.state
-        if record.expires_at <= now:
+        if record.expires_at <= now + self._expiry_safety_window:
+            # Stop using temporary credentials before the provider's hard expiry.
+            # This avoids starting a query with a credential likely to expire mid-flight.
             record.value = None
             record.state = "NEEDS_CREDENTIAL"
         elif record.expires_at - now <= self._expiring_window:
@@ -118,8 +124,8 @@ class InMemoryCredentialManager:
         entered = datetime.now(UTC)
         remaining = (expiry - entered).total_seconds()
         max_seconds = datasource.max_credential_ttl_minutes * 60
-        if remaining <= 0:
-            raise ValueError("Credential expiry must be in the future")
+        if remaining <= self._expiry_safety_window.total_seconds():
+            raise ValueError("Credential expiry is inside the safety window")
         if remaining > max_seconds + 60:
             raise ValueError("Credential expiry exceeds the datasource TTL limit")
 
